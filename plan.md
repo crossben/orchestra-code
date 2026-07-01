@@ -1,0 +1,243 @@
+# Orchestra — Build Plan
+
+> **The operating system for AI coding agents.**
+> One interface. Many coding agents. Run Claude Code, Codex, Gemini CLI, OpenCode and future
+> agents through a single supervised orchestrator, and pick the best agent for every task.
+
+## Guiding principles
+
+1. **Ship a runnable vertical slice before building a platform.** Every milestone below must end
+   in something a human can actually run and feel. No subsystem gets built until a real task needs it.
+2. **Supervised first.** The human approves each agent's diff before it touches the repo. One task at
+   a time. Autonomous, parallel, multi-agent-on-one-repo comes *much* later, only after the supervised
+   loop is trusted.
+3. **Abstract on the second implementation, not the first.** Don't write the `Agent` interface until a
+   second agent forces its shape. Premature interfaces are dead weight.
+4. **Never trust an LLM — verify.** The validation loop (build → test → show diff) is the product, not
+   a late-stage nicety. It lands early.
+
+---
+
+## The interface (end-state vs. build order)
+
+You will **not** open a terminal per agent. The end-state is a single persistent interface —
+Claude Code / opencode style — where you chat with Orchestra and it dispatches to the best agent
+under the hood, all in one session:
+
+```
+┌─ interactive shell (the real product — one session, you never leave it) ─┐
+│  you type a message                                                      │
+│        │                                                                 │
+│        ▼                                                                 │
+│   AI router ── picks the best agent (or answers directly) ──┐            │
+│        │                                                    │            │
+│        ▼                                                    ▼            │
+│   runner → validate → review (accept/reject)  ◄── same engine as ───────┐│
+└──────────────────────────────────────────────────────────────  `orchestra run`
+```
+
+The one-shot `orchestra run "..."` command built in M0 **is that engine**. The chat shell is a thin
+loop wrapped around it, added in M1. We build the engine first because it's fully testable without a
+UI — you don't want to debug the runner and a TUI at the same time. The `run` command survives as the
+scriptable entrypoint (CI, workflows); the shell is what you'll live in day to day. **Same engine, two
+front doors.**
+
+**Routing has three levels; build them in order:**
+1. **Static map** (config: task-kind → agent) — trivial fallback, always present.
+2. **AI router** ⭐ — a cheap, fast LLM call reads your raw message, classifies intent
+   (architecture / implementation / review / just-a-question), and picks the agent or answers directly.
+   This is the layer that makes the chat interface feel smart, and it's the natural fit — a quick "fix
+   this bug" has no planner step, so an LLM classification call is the right mechanism. **This is the
+   `AI router layer` you asked for.**
+3. **Learned / benchmarked** — data-driven routing from real benchmark results. Defer until benchmark
+   mode (M6) exists to feed it.
+
+---
+
+## Milestone 0 — Walking skeleton (the whole idea in one command)
+
+**Goal:** this actually works, end to end, with a single hardcoded agent:
+
+```
+orchestra run "add a /health endpoint"
+  → executes the coding CLI (e.g. `claude`) in the repo
+  → streams stdout/stderr live
+  → captures exit code
+  → runs the project's tests
+  → shows the resulting git diff
+  → asks the human: accept / reject
+  → on reject: git restores the working tree
+```
+
+If this feels good to use, the premise is validated. If it doesn't, nothing else matters yet.
+
+### Tasks
+- Cobra CLI with a single `run` command (no config system yet — flags are fine).
+- **Runner:** exec the agent CLI, stream output, capture stdout/stderr/exit code, honor a timeout,
+  support cancellation (Ctrl-C), set working directory.
+- **Validation (minimal):** run a configurable test command, report pass/fail.
+- **Supervised review:** show `git diff`, prompt accept/reject, `git checkout`/`git stash` on reject.
+- Structured logging to stdout.
+
+**Deliberately NOT in this milestone:** plugin system, agent interface, router, scheduler, TUI,
+memory, benchmarks, context engine, workspaces, config files.
+
+---
+
+## Milestone 1 — Second agent → the abstraction earns its keep
+
+**Goal:** `orchestra run "..." --agent codex` works, same supervised loop.
+
+Adding the second agent is what reveals the *real* shape of the interface. Extract it now, not before.
+
+```go
+type Agent interface {
+    Name() string
+    Run(ctx context.Context, task Task) (Result, error)
+    Health() error            // is the CLI installed / authed?
+    Capabilities() []Capability
+}
+```
+
+### Tasks
+- Extract the `Agent` interface from the two concrete implementations (Claude, Codex).
+- **Interactive shell:** running `orchestra` with no args drops you into a persistent chat session
+  (the real product UX). Each message runs through the same engine as `run`. Manual agent selection
+  for now — `@claude` / `@codex` prefix, or a default — since the AI router doesn't exist yet.
+- `orchestra agents` — list installed/available agents + health status.
+- Config file (YAML) so agent commands, test commands, and defaults aren't hardcoded flags.
+- `orchestra init` — scaffold a config in a repo.
+
+---
+
+## Milestone 2 — Trustworthy validation loop
+
+**Goal:** the diff proves itself before the human even looks at it. This is Orchestra's real edge.
+
+### Tasks
+- Validation pipeline: **build → fmt/lint → test**, each step configurable and skippable.
+- **Feed failures back to the agent** for a bounded number of retries (agent gets its own test
+  output and tries again). This closes the loop and is the single most valuable feature.
+- Clear pass/fail summary in the review step, so accept/reject is an informed decision.
+
+---
+
+## Milestone 3 — Workflows (sequential, supervised)
+
+**Goal:** chain steps into a repeatable pipeline — still one task at a time, still human-approved.
+
+```yaml
+name: feature
+steps:
+  - plan       # decompose the request into tasks (no coding)
+  - implement  # run the chosen agent
+  - test       # validation loop
+  - review     # human accept/reject
+```
+
+### Tasks
+- **Planner:** turn a request ("build authentication") into an ordered task list. Decomposition only,
+  no coding. Output is reviewable by the human before execution.
+- **Workflow engine:** run steps sequentially, stop on failure, resume support.
+- Memory (SQLite): store execution traces, last successful prompts, and per-project preferred agent.
+  Start here — it's cheap and immediately useful for retries and history.
+
+---
+
+## Milestone 4 — AI router (Orchestra picks the agent itself)
+
+**Goal:** stop making the human pick the agent. You just type your message; Orchestra reads it and
+dispatches to the best agent — the layer that makes the chat interface feel intelligent.
+
+Now that M1–M3 exist (multiple agents, a shell, a planner), the router has something to choose between
+and a place to plug in. Build the two cheap levels; defer the expensive one:
+
+### Tasks
+- **Static routing table** (config: task kind → preferred agent) — the deterministic fallback, and what
+  the AI router falls back to when unsure.
+- **AI router:** a small, fast LLM call classifies each incoming message (architecture / implementation /
+  review / plain question) and picks the agent — or answers directly without dispatching for simple Q&A.
+  This replaces the manual `@claude` / `@codex` selection from M1; the prefix stays as a manual override.
+- Router explains its choice ("routing to Codex — implementation task") so the human can trust/override it.
+- **Defer** data-driven scoring (speed / token / test-pass rate) until benchmark mode (M6) can feed it.
+
+---
+
+## Milestone 5 — Parallel & isolation (the genuinely hard milestone)
+
+**Goal:** run independent tasks concurrently without agents stepping on each other.
+
+⚠️ This is where most orchestrators get messy — two agents editing one repo and auto-merging is deep.
+Budget real fear here. Do not attempt before the supervised single-task loop is rock solid.
+
+### Tasks
+- **Workspace isolation via git worktrees** — one worktree per concurrent agent.
+- **Scheduler:** dependency graph, priority queue, bounded concurrency.
+- **Git integration:** branch per task, commit, diff, merge, conflict detection, rollback.
+- Human still approves merges back to the main branch.
+
+---
+
+## Milestone 6 — Polish & differentiation
+
+The nice-to-haves that make the project stand out — build only once the core is trusted and used.
+
+- **TUI dashboard (Bubble Tea):** agents, tasks, logs, costs, timeline, current step.
+- **Benchmark mode:** run one task through every agent; measure speed, tokens, compile/test success,
+  diff size, retries; produce a leaderboard. (Feeds data-driven routing.)
+- **Context engine:** git diff + changed files + ranking + token estimation, so you don't send the
+  whole repo every time. Add when context size actually becomes a problem, not before.
+- **Plugin SDK:** let others add agents (deepseek, aider, …) without touching core.
+
+---
+
+## Open question to settle before Milestone 5
+
+The trust/UX model is already decided for M0–M4: **supervised, one task at a time, human approves every
+diff.** Before parallel execution (M5), revisit: how autonomous do concurrent tasks get, and where does
+the human stay in the loop (per-diff? per-merge? end-of-run only)? Answer that before writing the scheduler.
+
+---
+
+## Repository structure
+
+Grow this as milestones need it — don't scaffold empty packages up front.
+
+```text
+orchestra/
+├── cmd/orchestra/        # main + Cobra commands
+├── internal/
+│   ├── runner/           # M0: exec, stream, capture, cancel
+│   ├── review/           # M0: diff + accept/reject
+│   ├── validate/         # M0/M2: build, lint, test, retry loop
+│   ├── agent/            # M1: Agent interface + implementations
+│   ├── config/           # M1: YAML loader
+│   ├── planner/          # M3
+│   ├── workflow/         # M3
+│   ├── memory/           # M3: SQLite
+│   ├── router/           # M4
+│   ├── scheduler/        # M5
+│   ├── workspace/        # M5: git worktrees
+│   ├── git/              # M5
+│   ├── benchmark/        # M6
+│   ├── context/          # M6
+│   └── tui/              # M6
+├── plugins/              # M6
+├── configs/
+├── examples/
+├── docs/
+└── scripts/
+```
+
+---
+
+## Why this order
+
+The original plan was a finished-product spec (16 phases, ~14 subsystems) rather than a build order —
+that's a recipe for burning out on infrastructure before validating the idea. This version front-loads
+the parts a user can *feel* (run an agent → verify → approve), defers everything speculative (benchmark
+leaderboards, plugin SDK, learned routing) until real usage proves it's needed, and treats the two
+genuinely hard problems honestly: **the validation/retry loop** (landed early, it's the differentiator)
+and **parallel multi-agent isolation** (landed last, it's the danger zone).
+
+Name ideas (pick before M0): Conductor, Maestro, Hive, Forge, Atlas, **Orchestra**, Nexus, Relay, Commander.

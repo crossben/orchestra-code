@@ -1,0 +1,13 @@
+# Build output
+/bin/
+orchestra
+
+# Go
+*.test
+*.out
+/vendor/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
