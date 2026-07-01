@@ -4,6 +4,7 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -57,4 +58,39 @@ func Run(ctx context.Context, spec Spec) (Result, error) {
 		return Result{ExitCode: -1, Duration: dur}, err
 	}
 	return Result{ExitCode: 0, Duration: dur}, nil
+}
+
+// RunCapture runs the spec and returns the process's stdout as a string, while
+// streaming stderr to the parent (so progress/log noise is still visible). Used
+// by the planner, which needs to parse an agent's textual answer rather than let
+// it flow to the terminal. No stdin is attached.
+func RunCapture(ctx context.Context, spec Spec) (string, Result, error) {
+	if spec.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, spec.Timeout)
+		defer cancel()
+	}
+
+	var stdout bytes.Buffer
+	cmd := exec.CommandContext(ctx, spec.Bin, spec.Args...)
+	cmd.Dir = spec.Dir
+	cmd.Stdout = &stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = append(os.Environ(), spec.Env...)
+
+	start := time.Now()
+	err := cmd.Run()
+	dur := time.Since(start)
+	out := stdout.String()
+
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		return out, Result{ExitCode: exitErr.ExitCode(), Duration: dur}, nil
+	}
+	if ctx.Err() == context.DeadlineExceeded {
+		return out, Result{ExitCode: -1, Duration: dur}, fmt.Errorf("timed out after %s", spec.Timeout)
+	}
+	if err != nil {
+		return out, Result{ExitCode: -1, Duration: dur}, err
+	}
+	return out, Result{ExitCode: 0, Duration: dur}, nil
 }

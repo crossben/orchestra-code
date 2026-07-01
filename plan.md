@@ -134,7 +134,18 @@ prompt; exit code reflects whether accepted changes actually pass. Config gains 
 
 ---
 
-## Milestone 3 — Workflows (sequential, supervised)
+## Milestone 3 — Workflows (sequential, supervised) ✅ DONE
+
+**Shipped:** `orchestra plan "<request>"` decomposes a request into ordered steps via a plan-capable
+agent in query mode (stdout captured + JSON parsed leniently); `orchestra do "<request>"` plans →
+human approves the plan → executes each step through the supervised engine sequentially, committing
+each accepted step and halting on the first rejection; SQLite **memory** (`~/.orchestra/orchestra.db`,
+outside the tree so it never dirties it) records every run; `orchestra history` shows recent runs +
+the preferred agent (most-accepted for the project). Added `runner.RunCapture` + `agent.Querier`.
+Also: **mimo** added to the built-in agents. Verified: plan parse, full workflow, halt-on-reject,
+plan-decline, history + preferred-agent.
+
+
 
 **Goal:** chain steps into a repeatable pipeline — still one task at a time, still human-approved.
 

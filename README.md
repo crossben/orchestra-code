@@ -4,11 +4,12 @@
 
 ---
 
-## Where it's at: M2 — self-correcting validation loop
+## Where it's at: M3 — plans, sequential workflows, memory
 
-Orchestra dispatches coding-agent CLIs (Claude, OpenCode, …) through one **supervised** interface:
+Orchestra dispatches coding-agent CLIs (Claude, OpenCode, Mimo, …) through one **supervised** interface:
 it runs an agent, validates the result (build → lint → test) and lets the agent fix its own failures
-before showing you the diff — and keeps nothing without your `y`.
+before showing you the diff — and keeps nothing without your `y`. It can also **decompose a big request
+into steps** and run them one at a time, remembering every run.
 
 Two ways to use it — **same engine underneath**:
 
@@ -38,6 +39,27 @@ Each accepted turn is committed, so the tree stays clean and every turn's diff s
 
 ```sh
 orchestra run "add a /health endpoint" --agent claude --test "go test ./..."
+```
+
+### Plans & sequential workflows
+
+Decompose a large request into ordered steps, then execute them one at a time — you approve the plan
+first, then review each step's diff:
+
+```sh
+orchestra plan "build user authentication"   # just show the decomposition
+orchestra do   "build user authentication"   # plan → approve → run each step, commit as you go
+```
+
+`do` commits each accepted step and **halts at the first rejected step** (prior steps stay committed).
+
+### Memory & history
+
+Every run is recorded in `~/.orchestra/orchestra.db` (outside your repo, so it never dirties the tree):
+
+```sh
+orchestra history        # recent runs for this project + the agent you accept most
+orchestra history --all  # across all projects
 ```
 
 ## How it works (supervised loop)
@@ -99,28 +121,34 @@ A config file overrides defaults and adds agents; matching names replace the bui
 
 ## Commands & flags
 
-| Command            | Purpose                                            |
-|--------------------|----------------------------------------------------|
-| `orchestra`        | interactive chat shell (default)                   |
-| `orchestra run`    | one-shot task dispatch                             |
-| `orchestra agents` | list agents and availability                        |
-| `orchestra init`   | write a starter `orchestra.yaml`                    |
+| Command             | Purpose                                            |
+|---------------------|----------------------------------------------------|
+| `orchestra`         | interactive chat shell (default)                   |
+| `orchestra run`     | one-shot task dispatch                             |
+| `orchestra plan`    | decompose a request into ordered steps (no coding) |
+| `orchestra do`      | plan + execute steps sequentially, supervised      |
+| `orchestra history` | recent runs + preferred agent                      |
+| `orchestra agents`  | list agents and availability                       |
+| `orchestra init`    | write a starter `orchestra.yaml`                   |
 
-`run` flags: `--agent`, `--test`, `--retries`, `--timeout`, `--force`. Global: `--dir`.
+`run` flags: `--agent`, `--test`, `--retries`, `--timeout`, `--force`. `do`: `--agent`, `--yes`. Global: `--dir`.
 
 ## Architecture
 
 ```
-cmd/orchestra        Cobra CLI: run / agents / init / shell (default)
-internal/agent       Agent interface + CLIAgent + registry
+cmd/orchestra        Cobra CLI: run / plan / do / history / agents / init / shell (default)
+internal/agent       Agent interface + CLIAgent + registry + Querier
 internal/config      YAML config + built-in agent defaults
-internal/engine      the supervised pipeline (dispatch → validate → review)   ← shared by run + shell
+internal/planner     decompose a request into ordered steps (query-mode agent)
+internal/engine      the supervised pipeline (dispatch → validate → retry → review)  ← shared by run/shell/do
 internal/shell       interactive chat REPL
-internal/runner      generic process exec (stream, capture, timeout)          ← the engine's engine
-internal/validate    run the test command, report pass/fail
+internal/memory      SQLite run history + preferred-agent hint (~/.orchestra)
+internal/runner      generic process exec (stream / capture / timeout)               ← the engine's engine
+internal/validate    build → lint → test pipeline, stop-on-first-failure
 internal/gitutil     is-repo / is-clean / diff / restore / commit
 internal/review      show the diff, prompt accept/reject
 ```
 
-`runner` runs a process; `agent` says which command each agent is; `engine` is the supervised loop both
-front doors (`run` and the shell) drive. Next: the AI router (M4) becomes another layer over `engine`.
+`runner` runs a process; `agent` says which command each agent is; `engine` is the supervised loop every
+front door (`run`, shell, `do`) drives; `planner` + `do` add multi-step workflows; `memory` records it all.
+Next: the AI router (M4) becomes another layer over `engine`.

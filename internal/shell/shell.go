@@ -16,6 +16,7 @@ import (
 
 	"github.com/crossben/orchestra/internal/agent"
 	"github.com/crossben/orchestra/internal/engine"
+	"github.com/crossben/orchestra/internal/memory"
 	"github.com/crossben/orchestra/internal/validate"
 )
 
@@ -27,11 +28,12 @@ type Shell struct {
 	maxRetries int
 	timeout    time.Duration
 	current    string // current default agent
+	mem        *memory.Store
 	in         *bufio.Reader
 }
 
 // New builds a Shell. defaultAgent selects the initially active agent.
-func New(reg *agent.Registry, dir, defaultAgent string, stages []validate.Stage, maxRetries int, timeout time.Duration) *Shell {
+func New(reg *agent.Registry, dir, defaultAgent string, stages []validate.Stage, maxRetries int, timeout time.Duration, mem *memory.Store) *Shell {
 	return &Shell{
 		reg:        reg,
 		dir:        dir,
@@ -39,6 +41,7 @@ func New(reg *agent.Registry, dir, defaultAgent string, stages []validate.Stage,
 		maxRetries: maxRetries,
 		timeout:    timeout,
 		current:    defaultAgent,
+		mem:        mem,
 		in:         bufio.NewReader(os.Stdin),
 	}
 }
@@ -103,6 +106,7 @@ func (s *Shell) dispatch(ctx context.Context, line string) {
 		MaxRetries:     s.maxRetries,
 		Timeout:        s.timeout,
 		CommitOnAccept: true,
+		Memory:         s.mem,
 	})
 	if err != nil {
 		fmt.Printf("  error: %v\n", err)

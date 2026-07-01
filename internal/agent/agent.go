@@ -46,6 +46,23 @@ type Agent interface {
 	Capabilities() []Capability
 }
 
+// Querier is an agent that can answer a prompt with text (its stdout) instead of
+// editing files — used by the planner for decomposition. CLIAgent implements it;
+// callers type-assert and fall back gracefully if an agent doesn't.
+type Querier interface {
+	Query(ctx context.Context, task Task) (string, error)
+}
+
+// Has reports whether an agent has a given capability.
+func Has(a Agent, c Capability) bool {
+	for _, cap := range a.Capabilities() {
+		if cap == c {
+			return true
+		}
+	}
+	return false
+}
+
 // CLIAgent runs a coding-agent CLI in headless mode. Args is the prefix that
 // selects headless/auto-approve mode; the task prompt is appended as the final
 // argument. Auto-approve is deliberate: Orchestra's diff review is the human
@@ -73,12 +90,21 @@ func (a *CLIAgent) Health() error {
 
 // Run dispatches the task to the CLI via the runner.
 func (a *CLIAgent) Run(ctx context.Context, task Task) (Result, error) {
-	args := append(slices.Clone(a.args), task.Prompt)
-	r, err := runner.Run(ctx, runner.Spec{
+	r, err := runner.Run(ctx, a.spec(task))
+	return Result{ExitCode: r.ExitCode, Duration: r.Duration}, err
+}
+
+// Query runs the CLI and captures its stdout (for planning / decomposition).
+func (a *CLIAgent) Query(ctx context.Context, task Task) (string, error) {
+	out, _, err := runner.RunCapture(ctx, a.spec(task))
+	return out, err
+}
+
+func (a *CLIAgent) spec(task Task) runner.Spec {
+	return runner.Spec{
 		Bin:     a.bin,
-		Args:    args,
+		Args:    append(slices.Clone(a.args), task.Prompt),
 		Dir:     task.Dir,
 		Timeout: task.Timeout,
-	})
-	return Result{ExitCode: r.ExitCode, Duration: r.Duration}, err
+	}
 }

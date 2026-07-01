@@ -13,11 +13,13 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/crossben/orchestra/internal/agent"
 	"github.com/crossben/orchestra/internal/gitutil"
+	"github.com/crossben/orchestra/internal/memory"
 	"github.com/crossben/orchestra/internal/review"
 	"github.com/crossben/orchestra/internal/validate"
 )
@@ -34,6 +36,10 @@ type Options struct {
 	// CommitOnAccept commits accepted changes so the working tree stays clean
 	// between turns. The shell sets this true; one-shot `run` leaves it false.
 	CommitOnAccept bool
+
+	// Memory, if non-nil, records the outcome of this execution for history and
+	// the preferred-agent hint.
+	Memory *memory.Store
 }
 
 // Outcome reports what happened.
@@ -46,8 +52,27 @@ type Outcome struct {
 
 // Execute runs the full supervised pipeline once (including retries). The reader
 // is shared with the caller so the accept/reject prompt reads the same input.
-func Execute(ctx context.Context, in *bufio.Reader, opts Options) (Outcome, error) {
-	var out Outcome
+func Execute(ctx context.Context, in *bufio.Reader, opts Options) (out Outcome, err error) {
+	// Record the outcome to memory on a clean (non-error) completion.
+	defer func() {
+		if err != nil || opts.Memory == nil {
+			return
+		}
+		dir := opts.Dir
+		if abs, e := filepath.Abs(dir); e == nil {
+			dir = abs // match `orchestra history`, which keys by absolute dir
+		}
+		if rerr := opts.Memory.Record(memory.Run{
+			Dir:      dir,
+			Agent:    opts.Agent.Name(),
+			Prompt:   opts.Prompt,
+			Outcome:  outcomeLabel(out),
+			Attempts: out.Attempts,
+			Passed:   out.Report.Passed(),
+		}, time.Now()); rerr != nil {
+			fmt.Printf("  (warning: could not record to memory: %v)\n", rerr)
+		}
+	}()
 
 	prompt := opts.Prompt
 	maxAttempts := opts.MaxRetries + 1 // first attempt + retries
@@ -143,6 +168,18 @@ func printReport(rep validate.Report) {
 	}
 	if rep.Passed() {
 		fmt.Println("✓ validation passed")
+	}
+}
+
+// outcomeLabel maps an Outcome to a memory outcome string.
+func outcomeLabel(out Outcome) string {
+	switch {
+	case !out.HadChanges:
+		return "no-change"
+	case out.Accepted:
+		return "accepted"
+	default:
+		return "rejected"
 	}
 }
 

@@ -113,6 +113,12 @@ func Default() *Config {
 				Capabilities: []string{"implement", "review"},
 			},
 			{
+				Name:         "mimo",
+				Bin:          "mimo",
+				Args:         []string{"run", "--dangerously-skip-permissions"},
+				Capabilities: []string{"implement", "review"},
+			},
+			{
 				Name:         "codex",
 				Bin:          "codex",
 				Args:         []string{"exec", "--dangerously-bypass-approvals-and-sandbox"},
