@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/crossben/orchestra/internal/ui"
 	"github.com/crossben/orchestra/internal/validate"
 )
 
@@ -20,25 +21,26 @@ import (
 // choice, since accept is the irreversible one.
 func Prompt(reader *bufio.Reader, diff string, rep validate.Report) bool {
 	fmt.Println()
-	fmt.Println("──────────────── proposed changes ────────────────")
-	fmt.Println(diff)
-	fmt.Println("───────────────────────────────────────────────────")
+	fmt.Println(ui.Heading("── proposed changes ──"))
+	fmt.Println(ui.Diff(diff))
+	fmt.Println(ui.Rule(40))
 
 	switch {
 	case rep.Skipped:
-		fmt.Println("validation: skipped (unverified)")
+		fmt.Println(ui.Dim("validation: skipped (unverified)"))
 	case rep.Passed():
-		fmt.Println("validation: ✓ all checks passed")
+		fmt.Println(ui.Success("validation: ✓ all checks passed"))
 	default:
 		if f, ok := rep.Failure(); ok {
-			fmt.Printf("validation: ✗ FAILED at %q — accepting keeps a known-broken change\n", f.Name)
+			fmt.Println(ui.Danger(fmt.Sprintf("validation: ✗ FAILED at %q", f.Name)) +
+				ui.Dim(" — accepting keeps a known-broken change"))
 		} else {
-			fmt.Println("validation: ✗ FAILED")
+			fmt.Println(ui.Danger("validation: ✗ FAILED"))
 		}
 	}
 
 	for {
-		fmt.Print("accept these changes? [y/N] ")
+		fmt.Print(ui.Accent("accept these changes?") + " [y/N] ")
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			// EOF / non-interactive input: reject by default.

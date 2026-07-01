@@ -21,6 +21,7 @@ import (
 	"github.com/crossben/orchestra/internal/gitutil"
 	"github.com/crossben/orchestra/internal/memory"
 	"github.com/crossben/orchestra/internal/review"
+	"github.com/crossben/orchestra/internal/ui"
 	"github.com/crossben/orchestra/internal/validate"
 )
 
@@ -79,18 +80,20 @@ func Execute(ctx context.Context, in *bufio.Reader, opts Options) (out Outcome, 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		out.Attempts = attempt
 		if attempt == 1 {
-			fmt.Printf("▸ dispatching to agent %q\n", opts.Agent.Name())
+			fmt.Printf("%s dispatching to %s\n", ui.Accent("▸"), ui.Agent(opts.Agent.Name()))
 		} else {
-			fmt.Printf("▸ retry %d/%d — agent %q self-correcting\n", attempt-1, opts.MaxRetries, opts.Agent.Name())
+			fmt.Printf("%s %s — %s self-correcting\n", ui.Accent("▸"),
+				ui.Warn(fmt.Sprintf("retry %d/%d", attempt-1, opts.MaxRetries)), ui.Agent(opts.Agent.Name()))
 		}
 
-		fmt.Println("──────────────────────────────────────────────")
+		fmt.Println(ui.Rule(48))
 		res, err := opts.Agent.Run(ctx, agent.Task{Prompt: prompt, Dir: opts.Dir, Timeout: opts.Timeout})
-		fmt.Println("──────────────────────────────────────────────")
+		fmt.Println(ui.Rule(48))
 		if err != nil {
 			return out, fmt.Errorf("agent %q failed to run: %w", opts.Agent.Name(), err)
 		}
-		fmt.Printf("▸ agent exited with code %d in %s\n", res.ExitCode, res.Duration.Round(time.Millisecond))
+		fmt.Printf("%s agent exited with code %d in %s\n", ui.Accent("▸"), res.ExitCode,
+			ui.Dim(res.Duration.Round(time.Millisecond).String()))
 
 		// Validate.
 		out.Report = validate.RunPipeline(ctx, opts.Dir, opts.Stages)
@@ -100,7 +103,7 @@ func Execute(ctx context.Context, in *bufio.Reader, opts Options) (out Outcome, 
 			break // nothing to fix, or everything passes
 		}
 		if attempt == maxAttempts {
-			fmt.Println("▸ retries exhausted — handing the failing result to you to review")
+			fmt.Println(ui.Warn("▸ retries exhausted — handing the failing result to you to review"))
 			break
 		}
 		// Feed the failure back and loop.
@@ -113,7 +116,7 @@ func Execute(ctx context.Context, in *bufio.Reader, opts Options) (out Outcome, 
 		return out, fmt.Errorf("compute diff: %w", err)
 	}
 	if diff == "" {
-		fmt.Println("▸ no changes to the working tree; nothing to review")
+		fmt.Println(ui.Dim("▸ no changes to the working tree; nothing to review"))
 		return out, nil
 	}
 	out.HadChanges = true
@@ -124,9 +127,9 @@ func Execute(ctx context.Context, in *bufio.Reader, opts Options) (out Outcome, 
 			if err := gitutil.Commit(opts.Dir, commitMessage(opts.Prompt)); err != nil {
 				return out, fmt.Errorf("commit accepted changes: %w", err)
 			}
-			fmt.Println("✓ changes accepted and committed")
+			fmt.Println(ui.Success("✓ changes accepted and committed"))
 		} else {
-			fmt.Println("✓ changes accepted — left in the working tree")
+			fmt.Println(ui.Success("✓ changes accepted — left in the working tree"))
 		}
 		return out, nil
 	}
@@ -134,7 +137,7 @@ func Execute(ctx context.Context, in *bufio.Reader, opts Options) (out Outcome, 
 	if err := gitutil.Restore(opts.Dir); err != nil {
 		return out, fmt.Errorf("restore after reject: %w", err)
 	}
-	fmt.Println("↺ changes rejected — working tree restored")
+	fmt.Println(ui.Warn("↺ changes rejected — working tree restored"))
 	return out, nil
 }
 
@@ -153,21 +156,21 @@ func retryPrompt(original string, rep validate.Report) string {
 // printReport shows each validation stage's status.
 func printReport(rep validate.Report) {
 	if rep.Skipped {
-		fmt.Println("▸ validation skipped (no checks configured)")
+		fmt.Println(ui.Dim("▸ validation skipped (no checks configured)"))
 		return
 	}
 	for _, s := range rep.Stages {
 		if s.Passed {
-			fmt.Printf("  ✓ %s\n", s.Name)
+			fmt.Printf("  %s %s\n", ui.Success("✓"), s.Name)
 		} else {
-			fmt.Printf("  ✗ %s FAILED\n", s.Name)
+			fmt.Printf("  %s %s\n", ui.Danger("✗"), ui.Danger(s.Name+" FAILED"))
 			if s.Output != "" {
-				fmt.Println(indent(strings.TrimSpace(s.Output)))
+				fmt.Println(ui.Dim(indent(strings.TrimSpace(s.Output))))
 			}
 		}
 	}
 	if rep.Passed() {
-		fmt.Println("✓ validation passed")
+		fmt.Println(ui.Success("✓ validation passed"))
 	}
 }
 

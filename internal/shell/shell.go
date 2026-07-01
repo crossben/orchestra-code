@@ -18,6 +18,7 @@ import (
 	"github.com/crossben/orchestra/internal/engine"
 	"github.com/crossben/orchestra/internal/memory"
 	"github.com/crossben/orchestra/internal/router"
+	"github.com/crossben/orchestra/internal/ui"
 	"github.com/crossben/orchestra/internal/validate"
 )
 
@@ -56,7 +57,7 @@ func New(reg *agent.Registry, dir, defaultAgent string, stages []validate.Stage,
 func (s *Shell) Run(ctx context.Context) error {
 	s.banner()
 	for {
-		fmt.Printf("\norchestra (%s) › ", s.promptTag())
+		fmt.Printf("\n%s %s ", ui.Accent("orchestra")+ui.Dim(" ("+s.promptTag()+")"), ui.Accent2("›"))
 		line, err := s.in.ReadString('\n')
 		if err == io.EOF {
 			fmt.Println("\nbye 👋")
@@ -100,18 +101,21 @@ func (s *Shell) handle(ctx context.Context, line string) {
 	}
 
 	// AI routing.
-	fmt.Println("  … routing")
+	sp := ui.Spin("routing…")
 	d := s.router.Route(ctx, line, s.dir)
+	sp.Stop()
 	if d.IsQuestion() {
+		sp := ui.Spin("thinking…")
 		ans, err := s.router.Answer(ctx, line, s.dir, s.timeout)
+		sp.Stop()
 		if err != nil {
-			fmt.Printf("  error answering: %v\n", err)
+			fmt.Printf("  %s %v\n", ui.Danger("error answering:"), err)
 			return
 		}
 		fmt.Println(strings.TrimSpace(ans))
 		return
 	}
-	fmt.Printf("  ↳ %s → agent %q (%s)\n", d.Intent, d.Agent, d.Reason)
+	fmt.Printf("  %s %s → %s %s\n", ui.Accent2("↳"), d.Intent, ui.Agent(d.Agent), ui.Dim("("+d.Reason+")"))
 	s.runTask(ctx, d.Agent, line)
 }
 
@@ -205,13 +209,14 @@ func (s *Shell) promptTag() string {
 }
 
 func (s *Shell) banner() {
-	fmt.Println("orchestra — interactive session (M4)")
-	mode := "AI routing on — just type; @name or /route off to override"
+	ui.Banner("the operating system for AI coding agents")
+	fmt.Println()
+	mode := ui.Success("● ") + "AI routing on — just type; " + ui.Accent2("@name") + " or " + ui.Accent2("/route off") + " to override"
 	if !s.routing {
-		mode = fmt.Sprintf("manual mode — active agent %q; /route on to auto-route", s.current)
+		mode = ui.Dim("○ ") + fmt.Sprintf("manual mode — active agent %s; %s to auto-route", ui.Agent(s.current), ui.Accent2("/route on"))
 	}
 	fmt.Println(mode)
-	fmt.Println("/help for commands, /exit to quit.")
+	fmt.Println(ui.Dim("/help for commands, /exit to quit."))
 	s.listAgents()
 }
 
@@ -229,17 +234,17 @@ func (s *Shell) help() {
 }
 
 func (s *Shell) listAgents() {
-	fmt.Println("  agents:")
+	fmt.Println(ui.Dim("  agents:"))
 	for _, a := range s.reg.All() {
-		status := "✓"
+		status := ui.Success("✓")
 		if err := a.Health(); err != nil {
-			status = "✗ not installed"
+			status = ui.Dim("✗ not installed")
 		}
 		marker := "  "
 		if !s.routing && a.Name() == s.current {
-			marker = "▸ "
+			marker = ui.Accent2("▸ ")
 		}
-		fmt.Printf("    %s%-10s %s\n", marker, a.Name(), status)
+		fmt.Printf("    %s%s %s\n", marker, ui.Agent(fmt.Sprintf("%-10s", a.Name())), status)
 	}
 }
 

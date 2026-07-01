@@ -214,6 +214,10 @@ Budget real fear here. Do not attempt before the supervised single-task loop is 
 
 The nice-to-haves that make the project stand out — build only once the core is trusted and used.
 
+- **CLI polish (styled REPL) ✅ DONE (ahead of schedule):** `internal/ui` — gradient ORCHESTRA banner
+  with reveal animation, TTY-gated spinners during routing/planning/answering, colored diffs and status
+  lines. Auto-disables color/animation when piped or `NO_COLOR` is set (regression stays green). The
+  full-screen dashboard below is still the later, larger effort.
 - **TUI dashboard (Bubble Tea):** agents, tasks, logs, costs, timeline, current step.
 - **Benchmark mode:** run one task through every agent; measure speed, tokens, compile/test success,
   diff size, retries; produce a leaderboard. (Feeds data-driven routing.)

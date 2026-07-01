@@ -158,6 +158,7 @@ A config file overrides defaults and adds agents; matching names replace the bui
 cmd/orchestra        Cobra CLI: run / plan / do / history / agents / init / shell (default)
 internal/agent       Agent interface + CLIAgent + registry + Querier
 internal/config      YAML config + built-in agent defaults
+internal/ui          terminal styling: gradient banner, spinners, colored diffs (TTY-aware)
 internal/router      AI routing: Classifier (CLI now, API later) → Decision, 3-tier fallback
 internal/planner     decompose a request into ordered steps (query-mode agent)
 internal/engine      the supervised pipeline (dispatch → validate → retry → review)  ← shared by run/shell/do
