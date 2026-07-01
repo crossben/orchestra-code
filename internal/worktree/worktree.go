@@ -25,8 +25,9 @@ type Tree struct {
 
 // Manager creates and reaps worktrees for a base repository.
 type Manager struct {
-	repo string // base repository directory
-	root string // temp dir holding the worktrees
+	repo  string // base repository directory
+	root  string // temp dir holding the worktrees
+	trees []Tree // everything created, so Cleanup can reap leftovers
 }
 
 // NewManager prepares a worktree root for the given repo.
@@ -50,7 +51,9 @@ func (m *Manager) Add(id, fromRef string) (Tree, error) {
 	if _, err := m.git(m.repo, "worktree", "add", "-b", branch, dir, fromRef); err != nil {
 		return Tree{}, fmt.Errorf("create worktree %s: %w", id, err)
 	}
-	return Tree{ID: id, Dir: dir, Branch: branch}, nil
+	t := Tree{ID: id, Dir: dir, Branch: branch}
+	m.trees = append(m.trees, t)
+	return t, nil
 }
 
 // Merge merges the tree's branch into the base repo's current branch. It returns
@@ -86,8 +89,14 @@ func (m *Manager) Remove(t Tree) error {
 	return nil
 }
 
-// Cleanup removes the worktree root and prunes git's records. Call when done.
+// Cleanup reaps every worktree and branch it created, then removes the root and
+// prunes git's records. Safe to call after a partial/interrupted run — any
+// worktree not already Removed is torn down here, so nothing leaks.
 func (m *Manager) Cleanup() {
+	for _, t := range m.trees {
+		_, _ = m.git(m.repo, "worktree", "remove", "--force", t.Dir)
+		_, _ = m.git(m.repo, "branch", "-D", t.Branch)
+	}
 	_ = os.RemoveAll(m.root)
 	_, _ = m.git(m.repo, "worktree", "prune")
 }

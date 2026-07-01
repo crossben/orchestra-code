@@ -51,11 +51,17 @@ func Run(ctx context.Context, spec Spec) (Result, error) {
 	err := cmd.Run()
 	dur := time.Since(start)
 
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		return Result{ExitCode: exitErr.ExitCode(), Duration: dur}, nil
-	}
+	// Check the context FIRST: a timeout/cancel kills the child via signal, which
+	// surfaces as an *exec.ExitError (code -1). Without this ordering that would
+	// be misreported as a normal non-zero exit instead of a timeout.
 	if ctx.Err() == context.DeadlineExceeded {
 		return Result{ExitCode: -1, Duration: dur}, fmt.Errorf("timed out after %s", spec.Timeout)
+	}
+	if ctx.Err() == context.Canceled {
+		return Result{ExitCode: -1, Duration: dur}, context.Canceled
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		return Result{ExitCode: exitErr.ExitCode(), Duration: dur}, nil
 	}
 	if err != nil {
 		return Result{ExitCode: -1, Duration: dur}, err
@@ -86,11 +92,14 @@ func RunCapture(ctx context.Context, spec Spec) (string, Result, error) {
 	dur := time.Since(start)
 	out := stdout.String()
 
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		return out, Result{ExitCode: exitErr.ExitCode(), Duration: dur}, nil
-	}
 	if ctx.Err() == context.DeadlineExceeded {
 		return out, Result{ExitCode: -1, Duration: dur}, fmt.Errorf("timed out after %s", spec.Timeout)
+	}
+	if ctx.Err() == context.Canceled {
+		return out, Result{ExitCode: -1, Duration: dur}, context.Canceled
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		return out, Result{ExitCode: exitErr.ExitCode(), Duration: dur}, nil
 	}
 	if err != nil {
 		return out, Result{ExitCode: -1, Duration: dur}, err

@@ -66,10 +66,11 @@ const parallelTemplate = `You are a planning assistant for a software project. B
 
 Rules:
 - Do NOT write code or modify any files. Output a plan only.
-- 3 to 7 steps. Each step should be independently implementable and testable.
+- 2 to 7 steps. Each step should be independently implementable and testable.
 - For each step add "depends_on": a list of the 1-based step numbers that must complete BEFORE it (empty if it can start immediately / run in parallel with others).
+- For each step, assign "agent": the best-suited agent for that step from this list: [%s]. Respect any agent the task explicitly requests for a part of the work. Use "" if no strong preference.
 - Output ONLY a JSON array, no prose, no markdown fences. Each element:
-  {"title": "<short imperative>", "detail": "<one or two sentences>", "depends_on": [<step numbers>]}
+  {"title": "<short imperative>", "detail": "<one or two sentences>", "agent": "<agent name or empty>", "depends_on": [<step numbers>]}
 
 Task: %s`
 
@@ -79,12 +80,22 @@ func (p *Planner) Make(ctx context.Context, request, dir string) (Plan, error) {
 }
 
 // MakeParallel decomposes the request and asks the agent to declare per-step
-// dependencies, so the workflow runner can parallelize independent steps.
-func (p *Planner) MakeParallel(ctx context.Context, request, dir string) (Plan, error) {
-	pl, err := p.make(ctx, parallelTemplate, request, dir)
+// dependencies (and an optional per-step agent from agentChoices), so the
+// workflow runner can parallelize independent steps across the best agents.
+func (p *Planner) MakeParallel(ctx context.Context, request, dir string, agentChoices []string) (Plan, error) {
+	out, err := p.agent.Query(ctx, agent.Task{
+		Prompt:  fmt.Sprintf(parallelTemplate, strings.Join(agentChoices, ", "), request),
+		Dir:     dir,
+		Timeout: p.timeout,
+	})
 	if err != nil {
-		return pl, err
+		return Plan{}, fmt.Errorf("planning agent failed: %w", err)
 	}
+	steps, err := parseSteps(out)
+	if err != nil {
+		return Plan{}, err
+	}
+	pl := Plan{Request: request, Steps: steps}
 	sanitizeDeps(pl.Steps)
 	return pl, nil
 }

@@ -57,6 +57,7 @@ func (o Options) logf(format string, a ...any) {
 // Outcome reports what happened.
 type Outcome struct {
 	Attempts   int
+	ExitCode   int // last agent exit code (0 = clean; <0 = killed by signal/timeout)
 	Report     validate.Report
 	HadChanges bool
 	Accepted   bool
@@ -144,6 +145,7 @@ func runLoop(ctx context.Context, opts Options) (out Outcome, err error) {
 		if rerr != nil {
 			return out, fmt.Errorf("agent %q failed to run: %w", opts.Agent.Name(), rerr)
 		}
+		out.ExitCode = res.ExitCode
 		opts.logf("%s agent exited with code %d in %s", ui.Accent("▸"), res.ExitCode,
 			ui.Dim(res.Duration.Round(time.Millisecond).String()))
 
