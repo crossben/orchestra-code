@@ -6,18 +6,19 @@ package review
 import (
 	"bufio"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/crossben/orchestra/internal/validate"
 )
 
 // Prompt shows the diff and validation outcome, then asks the human to accept
-// or reject. Returns true to keep the changes.
+// or reject. Returns true to keep the changes. The reader is shared with the
+// caller (e.g. the interactive shell) so buffered input isn't split across two
+// readers.
 //
-// If stdin is not a terminal (e.g. piped/CI), it defaults to reject — the safe
-// choice, since accept is the irreversible one in M0.
-func Prompt(diff string, v validate.Result) bool {
+// If input is not a terminal (e.g. piped/CI), it defaults to reject — the safe
+// choice, since accept is the irreversible one.
+func Prompt(reader *bufio.Reader, diff string, v validate.Result) bool {
 	fmt.Println()
 	fmt.Println("──────────────── proposed changes ────────────────")
 	fmt.Println(diff)
@@ -32,7 +33,6 @@ func Prompt(diff string, v validate.Result) bool {
 		fmt.Println("validation: ✗ FAILED")
 	}
 
-	reader := bufio.NewReader(os.Stdin)
 	for {
 		fmt.Print("accept these changes? [y/N] ")
 		line, err := reader.ReadString('\n')

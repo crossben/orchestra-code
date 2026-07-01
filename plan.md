@@ -54,7 +54,7 @@ front doors.**
 
 ---
 
-## Milestone 0 — Walking skeleton (the whole idea in one command)
+## Milestone 0 — Walking skeleton (the whole idea in one command) ✅ DONE
 
 **Goal:** this actually works, end to end, with a single hardcoded agent:
 
@@ -84,7 +84,12 @@ memory, benchmarks, context engine, workspaces, config files.
 
 ---
 
-## Milestone 1 — Second agent → the abstraction earns its keep
+## Milestone 1 — Second agent → the abstraction earns its keep ✅ DONE
+
+**Shipped:** `Agent` interface + `CLIAgent` + registry; OpenCode as the second agent; YAML config with
+built-in defaults; interactive chat shell (default command) with `@agent` routing and `/agent` switch;
+`orchestra agents` / `init`; Cobra CLI; shared `engine` package driving both `run` and the shell.
+Key decision: agents run headless in **auto-approve mode** — Orchestra's diff review is the human gate.
 
 **Goal:** `orchestra run "..." --agent codex` works, same supervised loop.
 

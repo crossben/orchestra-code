@@ -62,6 +62,25 @@ func Restore(dir string) error {
 	return nil
 }
 
+// Commit stages everything in the working tree and records a commit. Used by
+// the interactive shell to snapshot each accepted turn, so the tree stays clean
+// between messages and the next turn's diff shows only its own changes.
+func Commit(dir, message string) error {
+	if _, err := run(dir, "add", "-A"); err != nil {
+		return err
+	}
+	if _, err := run(dir, "commit", "-m", message); err != nil {
+		return err
+	}
+	return nil
+}
+
+// HasHead reports whether the repo has at least one commit.
+func HasHead(dir string) bool {
+	_, err := run(dir, "rev-parse", "--verify", "HEAD")
+	return err == nil
+}
+
 // run executes a git command in dir and returns its stdout, wrapping failures
 // with stderr for context.
 func run(dir string, args ...string) (string, error) {
