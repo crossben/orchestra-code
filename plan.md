@@ -124,6 +124,12 @@ prompt; exit code reflects whether accepted changes actually pass. Config gains 
 `max_retries`; `run` gains `--retries`. Verified: self-correct→pass, retry exhaustion, accept-failing
 → non-zero exit, stop-on-first-failure ordering.
 
+**Follow-up ✅ (from dogfooding):** validators are now **auto-detected** by ecosystem (Go / Node / Rust /
+Python / plain JS) when none are configured, so the verify loop works out of the box for any project —
+not just ones with a hand-written `validate:` block. Only checks whose toolchain is installed run. This
+closed a real gap the dino-game test exposed (a JS project had `validation skipped`). Also fixed the same
+round: the agent subprocess inherited stdin and drained the accept/reject input → silent auto-reject.
+
 **Goal:** the diff proves itself before the human even looks at it. This is Orchestra's real edge.
 
 ### Tasks

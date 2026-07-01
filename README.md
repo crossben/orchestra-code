@@ -84,7 +84,9 @@ orchestra history --all  # across all projects
 ## How it works (supervised loop)
 
 1. **Dispatch** the agent CLI in headless, auto-approve mode, streaming its output live.
-2. **Validate** by running the pipeline (`build → lint → test`, stop at the first failure).
+2. **Validate** by running the pipeline (`build → lint → test`, stop at the first failure). Checks are
+   **auto-detected** from the project (Go, Node, Rust, Python, or plain JS) when none are configured —
+   only checks whose toolchain is installed are run, so a missing tool never causes a false failure.
 3. **Self-correct** — if a check fails, feed the failure back to the agent and let it retry in place,
    up to `max_retries` times, so you review a result that already builds and passes tests when possible.
 4. **Review** — show the git diff + per-stage validation report and ask you to **accept** or **reject**.
@@ -117,12 +119,14 @@ writes an `orchestra.yaml`:
 default_agent: claude
 timeout: 10m
 
-# Validation pipeline — each result must pass before you review it. Empty stages
-# are skipped. On failure the agent retries with the failure output, up to max_retries.
+# Validation pipeline — each result must pass before you review it. Leave stages
+# empty to auto-detect checks from the project; set them to override, or auto:false
+# to disable. On failure the agent retries with the output, up to max_retries.
 validate:
-  build: "go build ./..."
+  build: "go build ./..."   # or leave empty to auto-detect
   lint:  "go vet ./..."
   test:  "go test ./..."
+  auto:  true
 max_retries: 2
 
 # AI router — reads each message, answers questions, routes tasks to an agent.
@@ -170,7 +174,7 @@ A config file overrides defaults and adds agents; matching names replace the bui
 ```
 cmd/orchestra        Cobra CLI: run / plan / do / history / agents / init / shell (default)
 internal/agent       Agent interface + CLIAgent + registry + Querier
-internal/config      YAML config + built-in agent defaults
+internal/config      YAML config + built-in agent defaults + validator auto-detection
 internal/ui          terminal styling: gradient banner, spinners, colored diffs (TTY-aware)
 internal/router      AI routing: Classifier (CLI now, API later) → Decision, 3-tier fallback
 internal/planner     decompose a request into ordered steps (+ depends_on for parallel)

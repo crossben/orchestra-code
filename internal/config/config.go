@@ -31,6 +31,9 @@ type ValidateConfig struct {
 	Build string `yaml:"build"`
 	Lint  string `yaml:"lint"`
 	Test  string `yaml:"test"`
+	// Auto enables ecosystem auto-detection of validators when no explicit
+	// stages are set (default true). Pointer so "false" differs from unset.
+	Auto *bool `yaml:"auto"`
 }
 
 // RouterConfig configures the AI routing layer.
@@ -64,9 +67,9 @@ func (c *Config) RouterAgent() string {
 	return c.DefaultAgent
 }
 
-// Stages returns the ordered, non-empty validation stages. The legacy
-// test_command is used as the test stage when validate.test is unset.
-func (c *Config) Stages() []validate.Stage {
+// explicitStages returns the ordered validation stages configured by hand. The
+// legacy test_command is used as the test stage when validate.test is unset.
+func (c *Config) explicitStages() []validate.Stage {
 	test := c.Validate.Test
 	if test == "" {
 		test = c.TestCommand
@@ -83,6 +86,24 @@ func (c *Config) Stages() []validate.Stage {
 		}
 	}
 	return out
+}
+
+// autoDetect reports whether validator auto-detection is enabled (default true).
+func (c *Config) autoDetect() bool {
+	return c.Validate.Auto == nil || *c.Validate.Auto
+}
+
+// ResolveStages returns the validation stages to run for dir: hand-configured
+// stages if any, otherwise ecosystem-detected ones (unless auto-detect is off).
+// The bool reports whether the stages came from auto-detection.
+func (c *Config) ResolveStages(dir string) ([]validate.Stage, bool) {
+	if explicit := c.explicitStages(); len(explicit) > 0 {
+		return explicit, false
+	}
+	if c.autoDetect() {
+		return Detect(dir), true
+	}
+	return nil, false
 }
 
 // RetryLimit returns the max number of self-correction retries (default 2).
