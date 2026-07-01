@@ -20,9 +20,10 @@ import (
 
 // Step is one planned sub-task.
 type Step struct {
-	Title  string `json:"title"`
-	Detail string `json:"detail"`
-	Agent  string `json:"agent,omitempty"` // optional per-step agent (M4 router will use this)
+	Title     string `json:"title"`
+	Detail    string `json:"detail"`
+	Agent     string `json:"agent,omitempty"`      // optional per-step agent (M4 router)
+	DependsOn []int  `json:"depends_on,omitempty"` // 1-based indices of prerequisite steps (M5 parallel)
 }
 
 // Plan is an ordered list of steps.
@@ -61,10 +62,36 @@ Rules:
 
 Task: %s`
 
+const parallelTemplate = `You are a planning assistant for a software project. Break the task below into a short, ordered list of concrete sub-tasks, and identify which steps can run in PARALLEL vs. which depend on earlier ones.
+
+Rules:
+- Do NOT write code or modify any files. Output a plan only.
+- 3 to 7 steps. Each step should be independently implementable and testable.
+- For each step add "depends_on": a list of the 1-based step numbers that must complete BEFORE it (empty if it can start immediately / run in parallel with others).
+- Output ONLY a JSON array, no prose, no markdown fences. Each element:
+  {"title": "<short imperative>", "detail": "<one or two sentences>", "depends_on": [<step numbers>]}
+
+Task: %s`
+
 // Make asks the agent to decompose the request and returns the parsed plan.
 func (p *Planner) Make(ctx context.Context, request, dir string) (Plan, error) {
+	return p.make(ctx, promptTemplate, request, dir)
+}
+
+// MakeParallel decomposes the request and asks the agent to declare per-step
+// dependencies, so the workflow runner can parallelize independent steps.
+func (p *Planner) MakeParallel(ctx context.Context, request, dir string) (Plan, error) {
+	pl, err := p.make(ctx, parallelTemplate, request, dir)
+	if err != nil {
+		return pl, err
+	}
+	sanitizeDeps(pl.Steps)
+	return pl, nil
+}
+
+func (p *Planner) make(ctx context.Context, tmpl, request, dir string) (Plan, error) {
 	out, err := p.agent.Query(ctx, agent.Task{
-		Prompt:  fmt.Sprintf(promptTemplate, request),
+		Prompt:  fmt.Sprintf(tmpl, request),
 		Dir:     dir,
 		Timeout: p.timeout,
 	})
@@ -76,6 +103,20 @@ func (p *Planner) Make(ctx context.Context, request, dir string) (Plan, error) {
 		return Plan{}, err
 	}
 	return Plan{Request: request, Steps: steps}, nil
+}
+
+// sanitizeDeps drops out-of-range or self/forward dependencies so a malformed
+// plan can't create a cycle or reference a nonexistent step.
+func sanitizeDeps(steps []Step) {
+	for i := range steps {
+		var clean []int
+		for _, d := range steps[i].DependsOn {
+			if d >= 1 && d <= len(steps) && d-1 < i { // must reference an earlier step
+				clean = append(clean, d)
+			}
+		}
+		steps[i].DependsOn = clean
+	}
 }
 
 // parseSteps leniently extracts a JSON array of steps from free-form agent text.

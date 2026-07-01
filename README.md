@@ -4,13 +4,13 @@
 
 ---
 
-## Where it's at: M4 — AI router
+## Where it's at: M5 — parallel execution with worktree isolation
 
 Orchestra dispatches coding-agent CLIs (Claude, OpenCode, Mimo, …) through one **supervised** interface.
 You just chat: it **reads each message, answers plain questions directly, and routes coding tasks to the
 best agent** itself. It validates every result (build → lint → test), lets the agent fix its own failures,
-and keeps nothing without your `y`. It can also **decompose a big request into steps** and run them one at
-a time, remembering every run.
+and keeps nothing without your `y`. It can **decompose a big request into steps** — running independent
+ones **in parallel across isolated git worktrees** — and remembers every run.
 
 Two ways to use it — **same engine underneath**:
 
@@ -58,6 +58,19 @@ orchestra do   "build user authentication"   # plan → approve → run each ste
 ```
 
 `do` commits each accepted step and **halts at the first rejected step** (prior steps stay committed).
+
+**Parallel** (`--parallel`): the planner marks which steps are independent; Orchestra runs each ready
+step concurrently in its own **git worktree**, then you review + merge each result before the next
+dependency wave unlocks:
+
+```sh
+orchestra do --parallel --jobs 4 "build the API, the CLI, and the docs"
+```
+
+Independent steps run at once; dependent steps wait for their prerequisites to merge. Each accepted
+branch is merged into the base with **conflict detection** (a conflicting merge is left unmerged and its
+dependents are skipped); rejected branches are discarded. The base working tree is never touched during
+execution — all work happens in isolated worktrees.
 
 ### Memory & history
 
@@ -145,12 +158,12 @@ A config file overrides defaults and adds agents; matching names replace the bui
 | `orchestra`         | interactive chat shell with AI routing (default)   |
 | `orchestra run`     | one-shot task dispatch                             |
 | `orchestra plan`    | decompose a request into ordered steps (no coding) |
-| `orchestra do`      | plan + execute steps sequentially, supervised      |
+| `orchestra do`      | plan + execute steps (sequential, or --parallel)   |
 | `orchestra history` | recent runs + preferred agent                      |
 | `orchestra agents`  | list agents and availability                       |
 | `orchestra init`    | write a starter `orchestra.yaml`                   |
 
-`run` flags: `--agent`, `--test`, `--retries`, `--timeout`, `--force`. `do`: `--agent`, `--yes`. Global: `--dir`.
+`run` flags: `--agent`, `--test`, `--retries`, `--timeout`, `--force`. `do`: `--agent`, `--yes`, `--parallel`, `--jobs`. Global: `--dir`.
 
 ## Architecture
 
@@ -160,8 +173,10 @@ internal/agent       Agent interface + CLIAgent + registry + Querier
 internal/config      YAML config + built-in agent defaults
 internal/ui          terminal styling: gradient banner, spinners, colored diffs (TTY-aware)
 internal/router      AI routing: Classifier (CLI now, API later) → Decision, 3-tier fallback
-internal/planner     decompose a request into ordered steps (query-mode agent)
-internal/engine      the supervised pipeline (dispatch → validate → retry → review)  ← shared by run/shell/do
+internal/planner     decompose a request into ordered steps (+ depends_on for parallel)
+internal/scheduler   bounded-concurrency runner + DAG waves (cycle/blocked detection)
+internal/worktree    git-worktree isolation: branch per task, merge + conflict detection
+internal/engine      supervised pipeline (dispatch → validate → retry → review) + headless mode  ← run/shell/do
 internal/shell       interactive chat REPL
 internal/memory      SQLite run history + preferred-agent hint (~/.orchestra)
 internal/runner      generic process exec (stream / capture / timeout)               ← the engine's engine
@@ -172,4 +187,5 @@ internal/review      show the diff, prompt accept/reject
 
 `runner` runs a process; `agent` says which command each agent is; `engine` is the supervised loop every
 front door (`run`, shell, `do`) drives; `planner` + `do` add multi-step workflows; `router` picks the agent;
-`memory` records it all. Next (M5): parallel execution with git-worktree isolation.
+`scheduler` + `worktree` add parallel dependency waves; `memory` records it all. Next (M6): benchmark
+mode, context engine, plugin SDK, and the full Bubble Tea dashboard.

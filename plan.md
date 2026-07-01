@@ -195,7 +195,16 @@ and a place to plug in. Build the two cheap levels; defer the expensive one:
 
 ---
 
-## Milestone 5 — Parallel & isolation (the genuinely hard milestone)
+## Milestone 5 — Parallel & isolation (the genuinely hard milestone) ✅ DONE
+
+**Shipped:** `internal/worktree` (one git worktree + branch per task, merge with conflict detection,
+temp-dir root so the base tree stays clean); `internal/scheduler` (bounded-concurrency runner + DAG
+cycle/unknown-dep detection + ready/blocked computation, unit-tested); engine `ExecuteHeadless`
+(non-interactive run→validate→self-correct→commit-to-branch, sharing the M2 loop); planner emits
+`depends_on`. `orchestra do --parallel [--jobs N]` runs **dependency waves**: every ready step runs
+concurrently in its own worktree, then the human reviews + merges each result before the next wave
+unlocks. Supervised-first preserved — the human gate moved to **merge time**. Verified: parallel
+fan-out/fan-in, reject→partial, dependency-chain waves, plus unit tests for merge/conflict/scheduler.
 
 **Goal:** run independent tasks concurrently without agents stepping on each other.
 

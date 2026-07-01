@@ -41,6 +41,17 @@ type Options struct {
 	// Memory, if non-nil, records the outcome of this execution for history and
 	// the preferred-agent hint.
 	Memory *memory.Store
+
+	// Label prefixes progress output (used by parallel headless runs so lines
+	// from concurrent tasks are attributable). Empty for the interactive path.
+	Label string
+}
+
+func (o Options) logf(format string, a ...any) {
+	if o.Label != "" {
+		fmt.Printf("%s ", ui.Dim("["+o.Label+"]"))
+	}
+	fmt.Printf(format+"\n", a...)
 }
 
 // Outcome reports what happened.
@@ -56,58 +67,14 @@ type Outcome struct {
 func Execute(ctx context.Context, in *bufio.Reader, opts Options) (out Outcome, err error) {
 	// Record the outcome to memory on a clean (non-error) completion.
 	defer func() {
-		if err != nil || opts.Memory == nil {
-			return
-		}
-		dir := opts.Dir
-		if abs, e := filepath.Abs(dir); e == nil {
-			dir = abs // match `orchestra history`, which keys by absolute dir
-		}
-		if rerr := opts.Memory.Record(memory.Run{
-			Dir:      dir,
-			Agent:    opts.Agent.Name(),
-			Prompt:   opts.Prompt,
-			Outcome:  outcomeLabel(out),
-			Attempts: out.Attempts,
-			Passed:   out.Report.Passed(),
-		}, time.Now()); rerr != nil {
-			fmt.Printf("  (warning: could not record to memory: %v)\n", rerr)
+		if err == nil {
+			recordMemory(opts, out, outcomeLabel(out))
 		}
 	}()
 
-	prompt := opts.Prompt
-	maxAttempts := opts.MaxRetries + 1 // first attempt + retries
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		out.Attempts = attempt
-		if attempt == 1 {
-			fmt.Printf("%s dispatching to %s\n", ui.Accent("▸"), ui.Agent(opts.Agent.Name()))
-		} else {
-			fmt.Printf("%s %s — %s self-correcting\n", ui.Accent("▸"),
-				ui.Warn(fmt.Sprintf("retry %d/%d", attempt-1, opts.MaxRetries)), ui.Agent(opts.Agent.Name()))
-		}
-
-		fmt.Println(ui.Rule(48))
-		res, err := opts.Agent.Run(ctx, agent.Task{Prompt: prompt, Dir: opts.Dir, Timeout: opts.Timeout})
-		fmt.Println(ui.Rule(48))
-		if err != nil {
-			return out, fmt.Errorf("agent %q failed to run: %w", opts.Agent.Name(), err)
-		}
-		fmt.Printf("%s agent exited with code %d in %s\n", ui.Accent("▸"), res.ExitCode,
-			ui.Dim(res.Duration.Round(time.Millisecond).String()))
-
-		// Validate.
-		out.Report = validate.RunPipeline(ctx, opts.Dir, opts.Stages)
-		printReport(out.Report)
-
-		if out.Report.Skipped || out.Report.Passed() {
-			break // nothing to fix, or everything passes
-		}
-		if attempt == maxAttempts {
-			fmt.Println(ui.Warn("▸ retries exhausted — handing the failing result to you to review"))
-			break
-		}
-		// Feed the failure back and loop.
-		prompt = retryPrompt(opts.Prompt, out.Report)
+	out, err = runLoop(ctx, opts)
+	if err != nil {
+		return out, err
 	}
 
 	// Review the diff.
@@ -153,24 +120,124 @@ func retryPrompt(original string, rep validate.Report) string {
 	)
 }
 
-// printReport shows each validation stage's status.
-func printReport(rep validate.Report) {
+// runLoop performs the dispatch → validate → self-correct loop shared by the
+// interactive (Execute) and headless (ExecuteHeadless) paths.
+func runLoop(ctx context.Context, opts Options) (out Outcome, err error) {
+	prompt := opts.Prompt
+	maxAttempts := opts.MaxRetries + 1 // first attempt + retries
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		out.Attempts = attempt
+		if attempt == 1 {
+			opts.logf("%s dispatching to %s", ui.Accent("▸"), ui.Agent(opts.Agent.Name()))
+		} else {
+			opts.logf("%s %s — %s self-correcting", ui.Accent("▸"),
+				ui.Warn(fmt.Sprintf("retry %d/%d", attempt-1, opts.MaxRetries)), ui.Agent(opts.Agent.Name()))
+		}
+
+		if opts.Label == "" {
+			fmt.Println(ui.Rule(48))
+		}
+		res, rerr := opts.Agent.Run(ctx, agent.Task{Prompt: prompt, Dir: opts.Dir, Timeout: opts.Timeout})
+		if opts.Label == "" {
+			fmt.Println(ui.Rule(48))
+		}
+		if rerr != nil {
+			return out, fmt.Errorf("agent %q failed to run: %w", opts.Agent.Name(), rerr)
+		}
+		opts.logf("%s agent exited with code %d in %s", ui.Accent("▸"), res.ExitCode,
+			ui.Dim(res.Duration.Round(time.Millisecond).String()))
+
+		out.Report = validate.RunPipeline(ctx, opts.Dir, opts.Stages)
+		printReport(opts, out.Report)
+
+		if out.Report.Skipped || out.Report.Passed() {
+			break
+		}
+		if attempt == maxAttempts {
+			opts.logf(ui.Warn("▸ retries exhausted"))
+			break
+		}
+		prompt = retryPrompt(opts.Prompt, out.Report)
+	}
+	return out, nil
+}
+
+// ExecuteHeadless runs the loop non-interactively and commits any resulting
+// changes to the current branch (used inside a per-task worktree during parallel
+// execution). No accept/reject prompt — review happens later at merge time.
+func ExecuteHeadless(ctx context.Context, opts Options) (out Outcome, err error) {
+	defer func() {
+		if err == nil {
+			recordMemory(opts, out, headlessOutcome(out))
+		}
+	}()
+
+	out, err = runLoop(ctx, opts)
+	if err != nil {
+		return out, err
+	}
+	diff, derr := gitutil.Diff(opts.Dir)
+	if derr != nil {
+		return out, fmt.Errorf("compute diff: %w", derr)
+	}
+	if diff == "" {
+		opts.logf(ui.Dim("▸ no changes produced"))
+		return out, nil
+	}
+	out.HadChanges = true
+	if err := gitutil.Commit(opts.Dir, commitMessage(opts.Prompt)); err != nil {
+		return out, fmt.Errorf("commit changes: %w", err)
+	}
+	opts.logf("%s committed to branch", ui.Success("✓"))
+	return out, nil
+}
+
+// recordMemory persists an outcome (best-effort) keyed by absolute directory.
+func recordMemory(opts Options, out Outcome, outcome string) {
+	if opts.Memory == nil {
+		return
+	}
+	dir := opts.Dir
+	if abs, e := filepath.Abs(dir); e == nil {
+		dir = abs
+	}
+	if rerr := opts.Memory.Record(memory.Run{
+		Dir:      dir,
+		Agent:    opts.Agent.Name(),
+		Prompt:   opts.Prompt,
+		Outcome:  outcome,
+		Attempts: out.Attempts,
+		Passed:   out.Report.Passed(),
+	}, time.Now()); rerr != nil {
+		opts.logf("(warning: could not record to memory: %v)", rerr)
+	}
+}
+
+func headlessOutcome(out Outcome) string {
+	if !out.HadChanges {
+		return "no-change"
+	}
+	return "completed"
+}
+
+// printReport shows each validation stage's status (label-aware).
+func printReport(opts Options, rep validate.Report) {
 	if rep.Skipped {
-		fmt.Println(ui.Dim("▸ validation skipped (no checks configured)"))
+		opts.logf(ui.Dim("▸ validation skipped (no checks configured)"))
 		return
 	}
 	for _, s := range rep.Stages {
 		if s.Passed {
-			fmt.Printf("  %s %s\n", ui.Success("✓"), s.Name)
+			opts.logf("  %s %s", ui.Success("✓"), s.Name)
 		} else {
-			fmt.Printf("  %s %s\n", ui.Danger("✗"), ui.Danger(s.Name+" FAILED"))
-			if s.Output != "" {
+			opts.logf("  %s %s", ui.Danger("✗"), ui.Danger(s.Name+" FAILED"))
+			if s.Output != "" && opts.Label == "" {
 				fmt.Println(ui.Dim(indent(strings.TrimSpace(s.Output))))
 			}
 		}
 	}
 	if rep.Passed() {
-		fmt.Println(ui.Success("✓ validation passed"))
+		opts.logf(ui.Success("✓ validation passed"))
 	}
 }
 
