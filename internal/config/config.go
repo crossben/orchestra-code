@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crossben/orchestra/internal/agent"
+	"github.com/crossben/orchestra/internal/router"
 	"github.com/crossben/orchestra/internal/validate"
 	"gopkg.in/yaml.v3"
 )
@@ -32,14 +33,35 @@ type ValidateConfig struct {
 	Test  string `yaml:"test"`
 }
 
+// RouterConfig configures the AI routing layer.
+type RouterConfig struct {
+	Enabled *bool             `yaml:"enabled"` // pointer so "false" differs from unset
+	Agent   string            `yaml:"agent"`   // agent that does classification/answers
+	Routes  map[string]string `yaml:"routes"`  // intent → agent name (static fallback)
+}
+
 // Config is the top-level Orchestra configuration.
 type Config struct {
 	DefaultAgent string         `yaml:"default_agent"`
 	TestCommand  string         `yaml:"test_command"` // shorthand for validate.test (back-compat)
 	Validate     ValidateConfig `yaml:"validate"`
 	MaxRetries   *int           `yaml:"max_retries"` // pointer so 0 (disable) differs from unset
-	Timeout      string         `yaml:"timeout"`     // Go duration string, e.g. "10m"
+	Router       RouterConfig   `yaml:"router"`
+	Timeout      string         `yaml:"timeout"` // Go duration string, e.g. "10m"
 	Agents       []AgentConfig  `yaml:"agents"`
+}
+
+// RouterEnabled reports whether the AI router is on (default true).
+func (c *Config) RouterEnabled() bool {
+	return c.Router.Enabled == nil || *c.Router.Enabled
+}
+
+// RouterAgent returns the classification agent (falls back to default_agent).
+func (c *Config) RouterAgent() string {
+	if c.Router.Agent != "" {
+		return c.Router.Agent
+	}
+	return c.DefaultAgent
 }
 
 // Stages returns the ordered, non-empty validation stages. The legacy
@@ -95,10 +117,20 @@ func (c *Config) TimeoutDuration() time.Duration {
 // orchestra.yaml if your version differs.
 func Default() *Config {
 	two := 2
+	enabled := true
 	return &Config{
 		DefaultAgent: "claude",
 		Timeout:      "10m",
 		MaxRetries:   &two,
+		Router: RouterConfig{
+			Enabled: &enabled,
+			Agent:   "claude",
+			Routes: map[string]string{
+				"plan":      "claude",
+				"implement": "opencode",
+				"review":    "claude",
+			},
+		},
 		Agents: []AgentConfig{
 			{
 				Name:         "claude",
@@ -188,6 +220,18 @@ func merge(base, user *Config) {
 	if user.MaxRetries != nil {
 		base.MaxRetries = user.MaxRetries
 	}
+	if user.Router.Enabled != nil {
+		base.Router.Enabled = user.Router.Enabled
+	}
+	if user.Router.Agent != "" {
+		base.Router.Agent = user.Router.Agent
+	}
+	for intent, ag := range user.Router.Routes {
+		if base.Router.Routes == nil {
+			base.Router.Routes = map[string]string{}
+		}
+		base.Router.Routes[intent] = ag
+	}
 	if user.Timeout != "" {
 		base.Timeout = user.Timeout
 	}
@@ -204,6 +248,25 @@ func merge(base, user *Config) {
 			base.Agents = append(base.Agents, ua)
 		}
 	}
+}
+
+// BuildRouter constructs the AI router from config against a registry. The
+// router (CLI classifier) uses the configured router agent for classification
+// and direct answers.
+func (c *Config) BuildRouter(reg *agent.Registry) (*router.Router, error) {
+	ra, ok := reg.Get(c.RouterAgent())
+	if !ok {
+		return nil, fmt.Errorf("router agent %q is not configured", c.RouterAgent())
+	}
+	answerer, ok := ra.(agent.Querier)
+	if !ok {
+		return nil, fmt.Errorf("router agent %q cannot answer questions (no query support)", c.RouterAgent())
+	}
+	cls, err := router.NewCLIClassifier(ra, reg.Names(), c.TimeoutDuration())
+	if err != nil {
+		return nil, err
+	}
+	return router.New(cls, answerer, reg, c.Router.Routes, c.DefaultAgent), nil
 }
 
 // BuildRegistry turns the config's agents into a live agent.Registry.

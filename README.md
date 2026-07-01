@@ -4,12 +4,13 @@
 
 ---
 
-## Where it's at: M3 — plans, sequential workflows, memory
+## Where it's at: M4 — AI router
 
-Orchestra dispatches coding-agent CLIs (Claude, OpenCode, Mimo, …) through one **supervised** interface:
-it runs an agent, validates the result (build → lint → test) and lets the agent fix its own failures
-before showing you the diff — and keeps nothing without your `y`. It can also **decompose a big request
-into steps** and run them one at a time, remembering every run.
+Orchestra dispatches coding-agent CLIs (Claude, OpenCode, Mimo, …) through one **supervised** interface.
+You just chat: it **reads each message, answers plain questions directly, and routes coding tasks to the
+best agent** itself. It validates every result (build → lint → test), lets the agent fix its own failures,
+and keeps nothing without your `y`. It can also **decompose a big request into steps** and run them one at
+a time, remembering every run.
 
 Two ways to use it — **same engine underneath**:
 
@@ -20,20 +21,25 @@ orchestra            # drops you into a chat session
 ```
 
 ```
-orchestra (claude) › add a /health endpoint
+orchestra (auto) › what does this repo's config loader do?
+  … routing
+  <answered inline — no agent dispatched>
+
+orchestra (auto) › add a /health endpoint
+  ↳ implement → agent "opencode" (code change)
   … agent runs, tests run, diff shown …
   accept these changes? [y/N] y
   ✓ changes accepted and committed
 
-orchestra (claude) › @opencode write tests for it   # route one task to another agent
-orchestra (claude) › /agent opencode                # switch the active agent
-orchestra (opencode) › /exit
+orchestra (auto) › @claude write tests for it   # force one task to a specific agent
+orchestra (auto) › /route off                   # fall back to a fixed active agent
+orchestra (claude) › /exit
 ```
 
-Shell commands: `/agents`, `/agent <name>`, `/help`, `/exit`. Per-message routing: `@<name> <task>`.
+The **AI router** is on by default: plain questions are answered inline, coding tasks auto-route to the
+best agent (with a printed reason). Overrides: `@<name> <task>` forces an agent; `/route off` switches to
+a fixed active agent (`/agent <name>`). Shell commands: `/agents`, `/route [on|off]`, `/agent`, `/help`, `/exit`.
 Each accepted turn is committed, so the tree stays clean and every turn's diff shows only its own changes.
-
-> Agent selection is manual for now. **M4** adds the AI router that reads your message and picks the agent automatically.
 
 ### One-shot (scriptable, for CI/workflows)
 
@@ -106,6 +112,15 @@ validate:
   test:  "go test ./..."
 max_retries: 2
 
+# AI router — reads each message, answers questions, routes tasks to an agent.
+router:
+  enabled: true
+  agent: claude          # who classifies / answers
+  routes:                # static fallback: intent → agent
+    plan: claude
+    implement: opencode
+    review: claude
+
 agents:
   - name: claude
     bin: claude
@@ -113,6 +128,10 @@ agents:
     capabilities: [plan, implement, review]
   - name: opencode
     bin: opencode
+    args: ["run", "--dangerously-skip-permissions"]
+    capabilities: [implement, review]
+  - name: mimo
+    bin: mimo
     args: ["run", "--dangerously-skip-permissions"]
     capabilities: [implement, review]
 ```
@@ -123,7 +142,7 @@ A config file overrides defaults and adds agents; matching names replace the bui
 
 | Command             | Purpose                                            |
 |---------------------|----------------------------------------------------|
-| `orchestra`         | interactive chat shell (default)                   |
+| `orchestra`         | interactive chat shell with AI routing (default)   |
 | `orchestra run`     | one-shot task dispatch                             |
 | `orchestra plan`    | decompose a request into ordered steps (no coding) |
 | `orchestra do`      | plan + execute steps sequentially, supervised      |
@@ -139,6 +158,7 @@ A config file overrides defaults and adds agents; matching names replace the bui
 cmd/orchestra        Cobra CLI: run / plan / do / history / agents / init / shell (default)
 internal/agent       Agent interface + CLIAgent + registry + Querier
 internal/config      YAML config + built-in agent defaults
+internal/router      AI routing: Classifier (CLI now, API later) → Decision, 3-tier fallback
 internal/planner     decompose a request into ordered steps (query-mode agent)
 internal/engine      the supervised pipeline (dispatch → validate → retry → review)  ← shared by run/shell/do
 internal/shell       interactive chat REPL
@@ -150,5 +170,5 @@ internal/review      show the diff, prompt accept/reject
 ```
 
 `runner` runs a process; `agent` says which command each agent is; `engine` is the supervised loop every
-front door (`run`, shell, `do`) drives; `planner` + `do` add multi-step workflows; `memory` records it all.
-Next: the AI router (M4) becomes another layer over `engine`.
+front door (`run`, shell, `do`) drives; `planner` + `do` add multi-step workflows; `router` picks the agent;
+`memory` records it all. Next (M5): parallel execution with git-worktree isolation.

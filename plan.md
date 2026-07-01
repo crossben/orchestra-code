@@ -167,7 +167,16 @@ steps:
 
 ---
 
-## Milestone 4 — AI router (Orchestra picks the agent itself)
+## Milestone 4 — AI router (Orchestra picks the agent itself) ✅ DONE
+
+**Shipped:** `internal/router` with a pluggable `Classifier` interface (CLI classifier now — an agent
+in query mode returning JSON; direct-API classifier can drop in later) + `Decision`; three-tier
+resolution (AI suggestion → static `routes` map → default), choosing only healthy agents, that never
+blocks. The shell is router-driven by default: plain questions are **answered inline** (no dispatch),
+tasks auto-route with a printed reason; `@agent` still forces a choice and `/route on|off` toggles.
+`do` honors planner-assigned per-step agents. Config gains a `router:` block. Verified with fakes
+(question/implement/review/override/manual/garbage-fallback) and a **real claude smoke test**
+(question classified + answered inline, tree untouched).
 
 **Goal:** stop making the human pick the agent. You just type your message; Orchestra reads it and
 dispatches to the best agent — the layer that makes the chat interface feel intelligent.
