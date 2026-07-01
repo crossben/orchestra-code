@@ -18,19 +18,23 @@ import (
 //
 // If input is not a terminal (e.g. piped/CI), it defaults to reject — the safe
 // choice, since accept is the irreversible one.
-func Prompt(reader *bufio.Reader, diff string, v validate.Result) bool {
+func Prompt(reader *bufio.Reader, diff string, rep validate.Report) bool {
 	fmt.Println()
 	fmt.Println("──────────────── proposed changes ────────────────")
 	fmt.Println(diff)
 	fmt.Println("───────────────────────────────────────────────────")
 
 	switch {
-	case v.Skipped:
+	case rep.Skipped:
 		fmt.Println("validation: skipped (unverified)")
-	case v.Passed:
-		fmt.Println("validation: ✓ passed")
+	case rep.Passed():
+		fmt.Println("validation: ✓ all checks passed")
 	default:
-		fmt.Println("validation: ✗ FAILED")
+		if f, ok := rep.Failure(); ok {
+			fmt.Printf("validation: ✗ FAILED at %q — accepting keeps a known-broken change\n", f.Name)
+		} else {
+			fmt.Println("validation: ✗ FAILED")
+		}
 	}
 
 	for {

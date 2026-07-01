@@ -4,10 +4,11 @@
 
 ---
 
-## Where it's at: M1 — multiple agents + interactive shell
+## Where it's at: M2 — self-correcting validation loop
 
 Orchestra dispatches coding-agent CLIs (Claude, OpenCode, …) through one **supervised** interface:
-it runs an agent, verifies the result, shows you the diff, and keeps nothing without your `y`.
+it runs an agent, validates the result (build → lint → test) and lets the agent fix its own failures
+before showing you the diff — and keeps nothing without your `y`.
 
 Two ways to use it — **same engine underneath**:
 
@@ -42,9 +43,11 @@ orchestra run "add a /health endpoint" --agent claude --test "go test ./..."
 ## How it works (supervised loop)
 
 1. **Dispatch** the agent CLI in headless, auto-approve mode, streaming its output live.
-2. **Validate** by running your test command (pass/fail).
-3. **Review** — show the git diff and ask you to **accept** or **reject**.
-4. **Accept** keeps the changes (the shell commits them); **reject** restores the tree exactly.
+2. **Validate** by running the pipeline (`build → lint → test`, stop at the first failure).
+3. **Self-correct** — if a check fails, feed the failure back to the agent and let it retry in place,
+   up to `max_retries` times, so you review a result that already builds and passes tests when possible.
+4. **Review** — show the git diff + per-stage validation report and ask you to **accept** or **reject**.
+5. **Accept** keeps the changes (the shell commits them); **reject** restores the tree exactly.
 
 Auto-approve is deliberate: *Orchestra's diff review is the human gate*, so agents must not block on their own permission prompts.
 
@@ -71,8 +74,16 @@ writes an `orchestra.yaml`:
 
 ```yaml
 default_agent: claude
-test_command: "go test ./..."   # verifies each result
 timeout: 10m
+
+# Validation pipeline — each result must pass before you review it. Empty stages
+# are skipped. On failure the agent retries with the failure output, up to max_retries.
+validate:
+  build: "go build ./..."
+  lint:  "go vet ./..."
+  test:  "go test ./..."
+max_retries: 2
+
 agents:
   - name: claude
     bin: claude
@@ -95,7 +106,7 @@ A config file overrides defaults and adds agents; matching names replace the bui
 | `orchestra agents` | list agents and availability                        |
 | `orchestra init`   | write a starter `orchestra.yaml`                    |
 
-`run` flags: `--agent`, `--test`, `--timeout`, `--force`. Global: `--dir`.
+`run` flags: `--agent`, `--test`, `--retries`, `--timeout`, `--force`. Global: `--dir`.
 
 ## Architecture
 

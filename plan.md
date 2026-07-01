@@ -115,7 +115,14 @@ type Agent interface {
 
 ---
 
-## Milestone 2 — Trustworthy validation loop
+## Milestone 2 — Trustworthy validation loop ✅ DONE
+
+**Shipped:** validation pipeline (`build → lint → test`, each configurable/skippable, stop-on-first-
+failure); **self-correction loop** — a failing stage is fed back to the agent, which retries in place
+up to `max_retries` times (default 2) before the human sees anything; per-stage report at the review
+prompt; exit code reflects whether accepted changes actually pass. Config gains a `validate:` block and
+`max_retries`; `run` gains `--retries`. Verified: self-correct→pass, retry exhaustion, accept-failing
+→ non-zero exit, stop-on-first-failure ordering.
 
 **Goal:** the diff proves itself before the human even looks at it. This is Orchestra's real edge.
 

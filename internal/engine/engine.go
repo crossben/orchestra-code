@@ -1,7 +1,12 @@
 // Package engine is Orchestra's supervised execution pipeline: dispatch a task
-// to an agent, validate the result, show the diff, and accept or reject. Both
-// the `run` command and the interactive shell drive this same pipeline, so the
-// behaviour is identical however you invoke it.
+// to an agent, validate the result, let the agent self-correct against failing
+// checks, then show the diff for a human to accept or reject. Both the `run`
+// command and the interactive shell drive this same pipeline.
+//
+// The self-correction loop (M2) is the point: an agent's output is validated
+// (build → lint → test), and if a check fails the failure is fed back to the
+// agent for another attempt, up to a bounded number of retries — so the human
+// reviews a result that already builds and passes tests whenever possible.
 package engine
 
 import (
@@ -19,64 +24,65 @@ import (
 
 // Options configures a single task execution.
 type Options struct {
-	Agent       agent.Agent
-	Prompt      string
-	Dir         string
-	TestCommand string
-	Timeout     time.Duration
+	Agent      agent.Agent
+	Prompt     string
+	Dir        string
+	Stages     []validate.Stage // ordered validation pipeline (may be empty)
+	MaxRetries int              // self-correction attempts after the first failure
+	Timeout    time.Duration
 
 	// CommitOnAccept commits accepted changes so the working tree stays clean
-	// between turns. The shell sets this true (each turn builds on the last);
-	// the one-shot `run` command leaves changes uncommitted for the user.
+	// between turns. The shell sets this true; one-shot `run` leaves it false.
 	CommitOnAccept bool
 }
 
-// Outcome reports what happened, for callers that want to react (the shell
-// prints a per-turn summary; `run` maps it to an exit code).
+// Outcome reports what happened.
 type Outcome struct {
-	AgentExit  int
-	Duration   time.Duration
-	Validation validate.Result
+	Attempts   int
+	Report     validate.Report
 	HadChanges bool
 	Accepted   bool
 }
 
-// Execute runs the full supervised pipeline once. The reader is shared with the
-// caller so the accept/reject prompt reads from the same input stream.
+// Execute runs the full supervised pipeline once (including retries). The reader
+// is shared with the caller so the accept/reject prompt reads the same input.
 func Execute(ctx context.Context, in *bufio.Reader, opts Options) (Outcome, error) {
 	var out Outcome
 
-	// 1. Dispatch the agent.
-	fmt.Printf("▸ dispatching to agent %q\n", opts.Agent.Name())
-	fmt.Println("──────────────────────────────────────────────")
-	res, err := opts.Agent.Run(ctx, agent.Task{
-		Prompt:  opts.Prompt,
-		Dir:     opts.Dir,
-		Timeout: opts.Timeout,
-	})
-	fmt.Println("──────────────────────────────────────────────")
-	if err != nil {
-		return out, fmt.Errorf("agent %q failed to run: %w", opts.Agent.Name(), err)
-	}
-	out.AgentExit = res.ExitCode
-	out.Duration = res.Duration
-	fmt.Printf("▸ agent exited with code %d in %s\n", res.ExitCode, res.Duration.Round(time.Millisecond))
-
-	// 2. Validate.
-	out.Validation = validate.Run(ctx, opts.Dir, opts.TestCommand)
-	switch {
-	case out.Validation.Skipped:
-		fmt.Println("▸ validation skipped (no test command)")
-	case out.Validation.Passed:
-		fmt.Println("✓ validation passed")
-	default:
-		fmt.Println("✗ validation FAILED")
-		if out.Validation.Output != "" {
-			fmt.Println(indent(out.Validation.Output))
+	prompt := opts.Prompt
+	maxAttempts := opts.MaxRetries + 1 // first attempt + retries
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		out.Attempts = attempt
+		if attempt == 1 {
+			fmt.Printf("▸ dispatching to agent %q\n", opts.Agent.Name())
+		} else {
+			fmt.Printf("▸ retry %d/%d — agent %q self-correcting\n", attempt-1, opts.MaxRetries, opts.Agent.Name())
 		}
+
+		fmt.Println("──────────────────────────────────────────────")
+		res, err := opts.Agent.Run(ctx, agent.Task{Prompt: prompt, Dir: opts.Dir, Timeout: opts.Timeout})
+		fmt.Println("──────────────────────────────────────────────")
+		if err != nil {
+			return out, fmt.Errorf("agent %q failed to run: %w", opts.Agent.Name(), err)
+		}
+		fmt.Printf("▸ agent exited with code %d in %s\n", res.ExitCode, res.Duration.Round(time.Millisecond))
+
+		// Validate.
+		out.Report = validate.RunPipeline(ctx, opts.Dir, opts.Stages)
+		printReport(out.Report)
+
+		if out.Report.Skipped || out.Report.Passed() {
+			break // nothing to fix, or everything passes
+		}
+		if attempt == maxAttempts {
+			fmt.Println("▸ retries exhausted — handing the failing result to you to review")
+			break
+		}
+		// Feed the failure back and loop.
+		prompt = retryPrompt(opts.Prompt, out.Report)
 	}
 
-	// 3. Review the diff.
+	// Review the diff.
 	diff, err := gitutil.Diff(opts.Dir)
 	if err != nil {
 		return out, fmt.Errorf("compute diff: %w", err)
@@ -87,7 +93,7 @@ func Execute(ctx context.Context, in *bufio.Reader, opts Options) (Outcome, erro
 	}
 	out.HadChanges = true
 
-	out.Accepted = review.Prompt(in, diff, out.Validation)
+	out.Accepted = review.Prompt(in, diff, out.Report)
 	if out.Accepted {
 		if opts.CommitOnAccept {
 			if err := gitutil.Commit(opts.Dir, commitMessage(opts.Prompt)); err != nil {
@@ -105,6 +111,39 @@ func Execute(ctx context.Context, in *bufio.Reader, opts Options) (Outcome, erro
 	}
 	fmt.Println("↺ changes rejected — working tree restored")
 	return out, nil
+}
+
+// retryPrompt asks the agent to fix the failing check, keeping the original goal
+// in view. The working tree still holds the agent's prior edits, so it corrects
+// in place rather than starting over.
+func retryPrompt(original string, rep validate.Report) string {
+	return fmt.Sprintf(
+		"Your previous changes did not pass validation. %s\n\n"+
+			"Fix this in the existing code (your prior edits are still in the working tree). "+
+			"The original task was:\n%s",
+		rep.FeedbackText(), original,
+	)
+}
+
+// printReport shows each validation stage's status.
+func printReport(rep validate.Report) {
+	if rep.Skipped {
+		fmt.Println("▸ validation skipped (no checks configured)")
+		return
+	}
+	for _, s := range rep.Stages {
+		if s.Passed {
+			fmt.Printf("  ✓ %s\n", s.Name)
+		} else {
+			fmt.Printf("  ✗ %s FAILED\n", s.Name)
+			if s.Output != "" {
+				fmt.Println(indent(strings.TrimSpace(s.Output)))
+			}
+		}
+	}
+	if rep.Passed() {
+		fmt.Println("✓ validation passed")
+	}
 }
 
 // commitMessage builds a one-line commit subject from the task prompt.

@@ -16,27 +16,30 @@ import (
 
 	"github.com/crossben/orchestra/internal/agent"
 	"github.com/crossben/orchestra/internal/engine"
+	"github.com/crossben/orchestra/internal/validate"
 )
 
 // Shell holds interactive-session state.
 type Shell struct {
-	reg     *agent.Registry
-	dir     string
-	testCmd string
-	timeout time.Duration
-	current string // current default agent
-	in      *bufio.Reader
+	reg        *agent.Registry
+	dir        string
+	stages     []validate.Stage
+	maxRetries int
+	timeout    time.Duration
+	current    string // current default agent
+	in         *bufio.Reader
 }
 
 // New builds a Shell. defaultAgent selects the initially active agent.
-func New(reg *agent.Registry, dir, defaultAgent, testCmd string, timeout time.Duration) *Shell {
+func New(reg *agent.Registry, dir, defaultAgent string, stages []validate.Stage, maxRetries int, timeout time.Duration) *Shell {
 	return &Shell{
-		reg:     reg,
-		dir:     dir,
-		testCmd: testCmd,
-		timeout: timeout,
-		current: defaultAgent,
-		in:      bufio.NewReader(os.Stdin),
+		reg:        reg,
+		dir:        dir,
+		stages:     stages,
+		maxRetries: maxRetries,
+		timeout:    timeout,
+		current:    defaultAgent,
+		in:         bufio.NewReader(os.Stdin),
 	}
 }
 
@@ -96,7 +99,8 @@ func (s *Shell) dispatch(ctx context.Context, line string) {
 		Agent:          ag,
 		Prompt:         msg,
 		Dir:            s.dir,
-		TestCommand:    s.testCmd,
+		Stages:         s.stages,
+		MaxRetries:     s.maxRetries,
 		Timeout:        s.timeout,
 		CommitOnAccept: true,
 	})

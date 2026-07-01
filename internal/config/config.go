@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crossben/orchestra/internal/agent"
+	"github.com/crossben/orchestra/internal/validate"
 	"gopkg.in/yaml.v3"
 )
 
@@ -24,12 +25,53 @@ type AgentConfig struct {
 	Capabilities []string `yaml:"capabilities"` // plan|implement|review
 }
 
+// ValidateConfig configures the validation pipeline. Any empty stage is skipped.
+type ValidateConfig struct {
+	Build string `yaml:"build"`
+	Lint  string `yaml:"lint"`
+	Test  string `yaml:"test"`
+}
+
 // Config is the top-level Orchestra configuration.
 type Config struct {
-	DefaultAgent string        `yaml:"default_agent"`
-	TestCommand  string        `yaml:"test_command"`
-	Timeout      string        `yaml:"timeout"` // Go duration string, e.g. "10m"
-	Agents       []AgentConfig `yaml:"agents"`
+	DefaultAgent string         `yaml:"default_agent"`
+	TestCommand  string         `yaml:"test_command"` // shorthand for validate.test (back-compat)
+	Validate     ValidateConfig `yaml:"validate"`
+	MaxRetries   *int           `yaml:"max_retries"` // pointer so 0 (disable) differs from unset
+	Timeout      string         `yaml:"timeout"`     // Go duration string, e.g. "10m"
+	Agents       []AgentConfig  `yaml:"agents"`
+}
+
+// Stages returns the ordered, non-empty validation stages. The legacy
+// test_command is used as the test stage when validate.test is unset.
+func (c *Config) Stages() []validate.Stage {
+	test := c.Validate.Test
+	if test == "" {
+		test = c.TestCommand
+	}
+	candidates := []validate.Stage{
+		{Name: "build", Command: c.Validate.Build},
+		{Name: "lint", Command: c.Validate.Lint},
+		{Name: "test", Command: test},
+	}
+	var out []validate.Stage
+	for _, s := range candidates {
+		if s.Command != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// RetryLimit returns the max number of self-correction retries (default 2).
+func (c *Config) RetryLimit() int {
+	if c.MaxRetries == nil {
+		return 2
+	}
+	if *c.MaxRetries < 0 {
+		return 0
+	}
+	return *c.MaxRetries
 }
 
 // TimeoutDuration parses Timeout, falling back to 10m if unset/invalid.
@@ -52,9 +94,11 @@ func (c *Config) TimeoutDuration() time.Duration {
 // installed CLIs; codex and gemini flags are best-effort defaults — override in
 // orchestra.yaml if your version differs.
 func Default() *Config {
+	two := 2
 	return &Config{
 		DefaultAgent: "claude",
 		Timeout:      "10m",
+		MaxRetries:   &two,
 		Agents: []AgentConfig{
 			{
 				Name:         "claude",
@@ -125,6 +169,18 @@ func merge(base, user *Config) {
 	}
 	if user.TestCommand != "" {
 		base.TestCommand = user.TestCommand
+	}
+	if user.Validate.Build != "" {
+		base.Validate.Build = user.Validate.Build
+	}
+	if user.Validate.Lint != "" {
+		base.Validate.Lint = user.Validate.Lint
+	}
+	if user.Validate.Test != "" {
+		base.Validate.Test = user.Validate.Test
+	}
+	if user.MaxRetries != nil {
+		base.MaxRetries = user.MaxRetries
 	}
 	if user.Timeout != "" {
 		base.Timeout = user.Timeout
