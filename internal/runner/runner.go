@@ -39,7 +39,10 @@ func Run(ctx context.Context, spec Spec) (Result, error) {
 
 	cmd := exec.CommandContext(ctx, spec.Bin, spec.Args...)
 	cmd.Dir = spec.Dir
-	cmd.Stdin = os.Stdin
+	// Deliberately give the agent NO stdin: headless agents take their prompt
+	// from args, and inheriting os.Stdin lets the agent drain input meant for
+	// Orchestra's own accept/reject prompt (which silently reverts the work).
+	cmd.Stdin = nil
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = append(os.Environ(), spec.Env...)

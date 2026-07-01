@@ -11,3 +11,6 @@ orchestra
 .DS_Store
 .idea/
 .vscode/
+
+# dogfooding test project
+/code/
