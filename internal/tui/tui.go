@@ -1,17 +1,14 @@
 // Package tui is Orchestra's dashboard — a Bubble Tea full-screen view over your
-// agents (with live health probing), run history, and benchmark results, plus a
-// Chat tab. Chat hands the terminal to the full supervised engine (via tea.Exec)
-// so you get the same route → run → validate → accept/reject flow as the shell,
-// then returns to the dashboard. It observes state (config + SQLite memory) and,
-// on chat, drives the real engine — it does not reimplement chat in the render loop.
+// agents (with live health probing), run history, benchmark results, and an
+// in-pane Chat tab. Chat runs the agent quietly in the background (spinner while
+// it works), then shows the diff for accept/reject right inside the dashboard —
+// no screen flip. It reuses the engine's quiet Produce path so nothing streams
+// into the render loop.
 package tui
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"io"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -40,7 +37,15 @@ const (
 
 var tabNames = []string{"Agents", "History", "Benchmarks", "Chat"}
 
-// palette (cyan → violet accents, semantic green/red).
+type chatState int
+
+const (
+	chatIdle chatState = iota
+	chatRunning
+	chatReviewing
+)
+
+// palette
 var (
 	accent  = lipgloss.Color("#7C3AED")
 	accent2 = lipgloss.Color("#06B6D4")
@@ -57,10 +62,14 @@ var (
 	badSty    = lipgloss.NewStyle().Foreground(red).Bold(true)
 	footerSty = lipgloss.NewStyle().Foreground(gray)
 	promptSty = lipgloss.NewStyle().Foreground(accent).Bold(true)
+	youSty    = lipgloss.NewStyle().Foreground(accent2).Bold(true)
+	addSty    = lipgloss.NewStyle().Foreground(green)
+	delSty    = lipgloss.NewStyle().Foreground(red)
 )
 
-// Deps bundles everything the dashboard needs (read-only data + the engine
-// dependencies for the Chat tab).
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// Deps bundles everything the dashboard needs.
 type Deps struct {
 	Ctx          context.Context
 	Cfg          *config.Config
@@ -76,6 +85,11 @@ type Deps struct {
 	DefaultAgent string
 }
 
+type chatLine struct {
+	role string // "you" | "agent" | "sys"
+	text string
+}
+
 // Model is the dashboard state.
 type Model struct {
 	d             Deps
@@ -88,18 +102,19 @@ type Model struct {
 	probing bool
 	probed  map[string]agent.ProbeResult
 
-	input  string // chat input buffer
+	// chat
+	input    string
+	cstate   chatState
+	messages []chatLine
+	pending  engine.Turn // the turn awaiting accept/reject
+	frame    int         // spinner
+
 	status string
 }
 
 // New builds the dashboard model, loading initial data from memory.
 func New(d Deps) Model {
-	m := Model{
-		d:      d,
-		width:  80,
-		height: 24,
-		probed: map[string]agent.ProbeResult{},
-	}
+	m := Model{d: d, width: 80, height: 24, probed: map[string]agent.ProbeResult{}}
 	m.reload()
 	return m
 }
@@ -121,7 +136,12 @@ func (m Model) Init() tea.Cmd { return nil }
 // --- messages ---
 
 type probeDoneMsg struct{ results map[string]agent.ProbeResult }
-type chatDoneMsg struct{ err error }
+type turnMsg struct{ turn engine.Turn }
+type tickMsg struct{}
+
+func tickCmd() tea.Cmd {
+	return tea.Tick(90*time.Millisecond, func(time.Time) tea.Msg { return tickMsg{} })
+}
 
 func (m Model) probeCmd() tea.Cmd {
 	agents := m.d.Reg.All()
@@ -150,6 +170,38 @@ func (m Model) probeCmd() tea.Cmd {
 	}
 }
 
+// produceCmd runs one chat turn quietly in the background.
+func (m Model) produceCmd(text string) tea.Cmd {
+	d := m.d
+	return func() tea.Msg {
+		if !gitutil.IsRepo(d.Dir) {
+			return turnMsg{engine.Turn{Err: errNotRepo}}
+		}
+		if clean, _ := gitutil.IsClean(d.Dir); !clean {
+			return turnMsg{engine.Turn{Err: errDirty}}
+		}
+		ag, ok := d.Reg.Get(d.DefaultAgent)
+		if !ok {
+			return turnMsg{engine.Turn{Err: fmt.Errorf("agent %q not available", d.DefaultAgent)}}
+		}
+		t := engine.Produce(d.Ctx, engine.Options{
+			Agent:      ag,
+			Prompt:     text,
+			Dir:        d.Dir,
+			Stages:     d.Stages,
+			MaxRetries: d.MaxRetries,
+			Timeout:    d.Timeout,
+			Principles: d.Principles,
+		})
+		return turnMsg{t}
+	}
+}
+
+var (
+	errNotRepo = fmt.Errorf("not a git repository — chat needs one for the supervised loop")
+	errDirty   = fmt.Errorf("working tree has uncommitted changes — commit/stash first")
+)
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -158,13 +210,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.probed = msg.results
 		m.probing = false
 		m.status = "probe complete"
-	case chatDoneMsg:
-		m.reload()
-		if msg.err != nil {
-			m.status = "error: " + msg.err.Error()
-		} else {
-			m.status = "done — history updated"
+	case tickMsg:
+		if m.cstate == chatRunning {
+			m.frame++
+			return m, tickCmd()
 		}
+	case turnMsg:
+		return m.onTurn(msg.turn)
 	case tea.KeyMsg:
 		if m.active == tabChat {
 			return m.updateChat(msg)
@@ -198,18 +250,41 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// updateChat handles keys while the Chat tab's input is focused.
+// updateChat handles keys in the Chat tab. tab/shift+tab always navigate (so you
+// can leave chat while typing); ctrl+c always quits.
 func (m Model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyCtrlC:
+	switch msg.String() {
+	case "ctrl+c":
 		return m, tea.Quit
+	case "tab":
+		m.active = (m.active + 1) % 4
+		return m, nil
+	case "shift+tab":
+		m.active = (m.active + 3) % 4
+		return m, nil
+	}
+
+	if m.cstate == chatReviewing {
+		switch msg.String() {
+		case "y", "Y":
+			return m.accept()
+		case "n", "N", "esc":
+			return m.reject()
+		}
+		return m, nil
+	}
+	if m.cstate == chatRunning {
+		return m, nil // busy; ignore input
+	}
+
+	// idle
+	switch msg.Type {
 	case tea.KeyEsc:
 		m.active = tabAgents
 	case tea.KeyEnter:
 		return m.submitChat()
 	case tea.KeyBackspace:
-		if n := len(m.input); n > 0 {
-			r := []rune(m.input)
+		if r := []rune(m.input); len(r) > 0 {
 			m.input = string(r[:len(r)-1])
 		}
 	case tea.KeySpace:
@@ -220,22 +295,66 @@ func (m Model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// submitChat hands the terminal to the supervised engine for one turn.
 func (m Model) submitChat() (tea.Model, tea.Cmd) {
 	text := strings.TrimSpace(m.input)
 	if text == "" {
 		return m, nil
 	}
 	m.input = ""
-	m.status = "running…"
-	ex := &engineExec{
-		ctx: m.d.Ctx, dir: m.d.Dir, msg: text,
-		reg: m.d.Reg, current: m.d.DefaultAgent,
-		router: m.d.Router, routingOn: m.d.RoutingOn,
-		stages: m.d.Stages, maxRetries: m.d.MaxRetries,
-		timeout: m.d.Timeout, principles: m.d.Principles, mem: m.d.Mem,
+	m.messages = append(m.messages, chatLine{"you", text})
+	m.cstate = chatRunning
+	m.frame = 0
+	m.status = ""
+	return m, tea.Batch(tickCmd(), m.produceCmd(text))
+}
+
+func (m Model) onTurn(t engine.Turn) (tea.Model, tea.Cmd) {
+	switch {
+	case t.Err != nil:
+		m.messages = append(m.messages, chatLine{"sys", "error: " + t.Err.Error()})
+		m.cstate = chatIdle
+	case !t.HadChanges:
+		resp := strings.TrimSpace(t.AgentText)
+		if resp == "" {
+			resp = "(the agent made no file changes)"
+		}
+		m.messages = append(m.messages, chatLine{"agent", resp})
+		m.cstate = chatIdle
+	default:
+		m.pending = t
+		m.cstate = chatReviewing
 	}
-	return m, tea.Exec(ex, func(err error) tea.Msg { return chatDoneMsg{err: err} })
+	return m, nil
+}
+
+func (m Model) accept() (tea.Model, tea.Cmd) {
+	last := ""
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		if m.messages[i].role == "you" {
+			last = m.messages[i].text
+			break
+		}
+	}
+	if err := gitutil.Commit(m.d.Dir, "orchestra: "+firstLine(last)); err != nil {
+		m.messages = append(m.messages, chatLine{"sys", "commit failed: " + err.Error()})
+	} else {
+		m.messages = append(m.messages, chatLine{"sys", "✓ accepted & committed"})
+	}
+	m.cstate = chatIdle
+	m.pending = engine.Turn{}
+	m.reload()
+	return m, nil
+}
+
+func (m Model) reject() (tea.Model, tea.Cmd) {
+	if err := gitutil.Restore(m.d.Dir); err != nil {
+		m.messages = append(m.messages, chatLine{"sys", "restore failed: " + err.Error()})
+	} else {
+		m.messages = append(m.messages, chatLine{"sys", "↺ rejected & reverted"})
+	}
+	m.cstate = chatIdle
+	m.pending = engine.Turn{}
+	return m, nil
 }
 
 func (m Model) View() string {
@@ -267,17 +386,25 @@ func (m Model) header() string {
 			tabs = append(tabs, tabOff.Render(fmt.Sprintf("%d %s", i+1, name)))
 		}
 	}
-	line := title + "   " + strings.Join(tabs, " ")
-	return line + "\n" + dimSty.Render(strings.Repeat("─", min(m.width, 80)))
+	return title + "   " + strings.Join(tabs, " ") + "\n" + dimSty.Render(strings.Repeat("─", min(m.width, 80)))
 }
 
 func (m Model) footer() string {
-	keys := "tab: switch • r: refresh • q: quit"
+	var keys string
 	switch m.active {
 	case tabAgents:
-		keys = "tab: switch • p: probe agents • r: refresh • q: quit"
+		keys = "tab: switch • p: probe • r: refresh • q: quit"
 	case tabChat:
-		keys = "type a message • enter: send • esc: back • ctrl+c: quit"
+		switch m.cstate {
+		case chatReviewing:
+			keys = "y: accept & commit • n: reject & revert • tab: switch"
+		case chatRunning:
+			keys = "working… • tab: switch • ctrl+c: quit"
+		default:
+			keys = "type & enter: send • tab: switch • esc: leave • ctrl+c: quit"
+		}
+	default:
+		keys = "tab: switch • r: refresh • q: quit"
 	}
 	status := ""
 	if m.status != "" {
@@ -309,8 +436,7 @@ func (m Model) agentsView() string {
 		if name == m.d.DefaultAgent {
 			name += "*"
 		}
-		b.WriteString(fmt.Sprintf("%-12s %-14s %-22s %s\n",
-			name, installed, probe, dimSty.Render(caps(a))))
+		b.WriteString(fmt.Sprintf("%-12s %-14s %-22s %s\n", name, installed, probe, dimSty.Render(caps(a))))
 	}
 	b.WriteString("\n" + dimSty.Render("* default agent   ·   press p to live-probe whether each agent can actually run"))
 	return b.String()
@@ -366,103 +492,79 @@ func (m Model) benchView() string {
 
 func (m Model) chatView() string {
 	var b strings.Builder
-	mode := "agent: " + m.d.DefaultAgent
-	if m.d.RoutingOn && m.d.Router != nil {
-		mode = "AI routing on"
-	}
-	b.WriteString(headSty.Render("Chat") + dimSty.Render("   ("+mode+")") + "\n\n")
-	b.WriteString(promptSty.Render("› ") + m.input + dimSty.Render("▏") + "\n\n")
-	b.WriteString(dimSty.Render("press enter to send this to the agent — it runs the full supervised loop\n" +
-		"(route → run → validate → accept/reject) on the terminal, then returns here.\n"))
+	b.WriteString(headSty.Render("Chat") + dimSty.Render("   (agent: "+m.d.DefaultAgent+")") + "\n\n")
 
-	// A little recent activity for context.
-	if len(m.runs) > 0 {
-		b.WriteString("\n" + dimSty.Render("recent:") + "\n")
-		for i, r := range m.runs {
-			if i >= 5 {
-				break
-			}
-			b.WriteString(dimSty.Render(fmt.Sprintf("  %s  %-8s  %s  %s\n",
-				r.Time.Local().Format("15:04:05"), r.Agent, r.Outcome, truncate(firstLine(r.Prompt), 40))))
+	// Transcript (last messages that fit).
+	budget := m.height - 12
+	if budget < 3 {
+		budget = 3
+	}
+	msgs := m.messages
+	if len(msgs) > budget {
+		msgs = msgs[len(msgs)-budget:]
+	}
+	if len(msgs) == 0 {
+		b.WriteString(dimSty.Render("Ask the agent to do something — it runs in the background and shows the diff\nhere for you to accept or reject. Nothing leaves this screen.\n"))
+	}
+	for _, msg := range msgs {
+		switch msg.role {
+		case "you":
+			b.WriteString(youSty.Render("you › ") + truncate(firstLine(msg.text), m.width-8) + "\n")
+		case "agent":
+			b.WriteString(headSty.Render("agent ") + "\n" + indentWrap(msg.text, m.width-2, 6) + "\n")
+		case "sys":
+			b.WriteString(dimSty.Render("  · "+msg.text) + "\n")
 		}
+	}
+
+	b.WriteString("\n")
+	switch m.cstate {
+	case chatRunning:
+		b.WriteString(titleSty.Render(spinnerFrames[m.frame%len(spinnerFrames)]) + dimSty.Render(" agent is working…"))
+	case chatReviewing:
+		b.WriteString(m.reviewPane())
+	default:
+		b.WriteString(promptSty.Render("› ") + m.input + dimSty.Render("▏"))
 	}
 	return b.String()
 }
 
-// engineExec runs one supervised chat turn on the released terminal.
-type engineExec struct {
-	ctx        context.Context
-	dir        string
-	msg        string
-	reg        *agent.Registry
-	current    string
-	router     *router.Router
-	routingOn  bool
-	stages     []validate.Stage
-	maxRetries int
-	timeout    time.Duration
-	principles string
-	mem        *memory.Store
-}
-
-func (e *engineExec) SetStdin(io.Reader)  {}
-func (e *engineExec) SetStdout(io.Writer) {}
-func (e *engineExec) SetStderr(io.Writer) {}
-
-func (e *engineExec) Run() error {
-	if !gitutil.IsRepo(e.dir) {
-		fmt.Println("orchestra: not a git repository — chat needs one for the supervised loop")
-		return waitEnter()
+func (m Model) reviewPane() string {
+	var b strings.Builder
+	// validation summary
+	switch {
+	case m.pending.Report.Skipped:
+		b.WriteString(dimSty.Render("validation: skipped") + "\n")
+	case m.pending.Report.Passed():
+		b.WriteString(okSty.Render("validation: ✓ passed") + "\n")
+	default:
+		b.WriteString(badSty.Render("validation: ✗ failed") + "\n")
 	}
-	if clean, _ := gitutil.IsClean(e.dir); !clean {
-		fmt.Println("orchestra: working tree has uncommitted changes — commit/stash first")
-		return waitEnter()
+	// diff, truncated to fit
+	maxLines := m.height - 14
+	if maxLines < 4 {
+		maxLines = 4
 	}
-
-	in := bufio.NewReader(os.Stdin)
-	ag, ok := e.reg.Get(e.current)
-
-	// Route if enabled.
-	if e.router != nil && e.routingOn {
-		d := e.router.Route(e.ctx, e.msg, e.dir)
-		if d.IsQuestion() {
-			if ans, err := e.router.Answer(e.ctx, e.msg, e.dir, e.timeout); err == nil {
-				fmt.Println(strings.TrimSpace(ans))
-			}
-			return waitEnter()
-		}
-		if a, found := e.reg.Get(d.Agent); found {
-			ag, ok = a, true
-			fmt.Printf("↳ routing to %s (%s)\n", d.Agent, d.Reason)
+	lines := strings.Split(m.pending.Diff, "\n")
+	shown := lines
+	if len(shown) > maxLines {
+		shown = shown[:maxLines]
+	}
+	for _, ln := range shown {
+		switch {
+		case strings.HasPrefix(ln, "+") && !strings.HasPrefix(ln, "+++"):
+			b.WriteString(addSty.Render(truncate(ln, m.width-1)) + "\n")
+		case strings.HasPrefix(ln, "-") && !strings.HasPrefix(ln, "---"):
+			b.WriteString(delSty.Render(truncate(ln, m.width-1)) + "\n")
+		default:
+			b.WriteString(dimSty.Render(truncate(ln, m.width-1)) + "\n")
 		}
 	}
-	if !ok {
-		fmt.Printf("orchestra: agent %q not available\n", e.current)
-		return waitEnter()
+	if len(lines) > maxLines {
+		b.WriteString(dimSty.Render(fmt.Sprintf("… %d more diff lines\n", len(lines)-maxLines)))
 	}
-
-	_, err := engine.Execute(e.ctx, in, engine.Options{
-		Agent:          ag,
-		Prompt:         e.msg,
-		Dir:            e.dir,
-		Stages:         e.stages,
-		MaxRetries:     e.maxRetries,
-		Timeout:        e.timeout,
-		CommitOnAccept: true,
-		Memory:         e.mem,
-		Principles:     e.principles,
-	})
-	if err != nil {
-		fmt.Printf("error: %v\n", err)
-	}
-	_ = waitEnter()
-	return nil
-}
-
-func waitEnter() error {
-	fmt.Print("\n\033[2m(press enter to return to the dashboard)\033[0m ")
-	bufio.NewReader(os.Stdin).ReadString('\n')
-	return nil
+	b.WriteString(promptSty.Render("accept these changes?") + " [y]es / [n]o")
+	return b.String()
 }
 
 // --- helpers ---
@@ -498,6 +600,35 @@ func firstLine(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// indentWrap word-wraps text to width and indents each line by pad spaces,
+// showing at most a few lines so an agent's chatty response doesn't dominate.
+func indentWrap(text string, width, pad int) string {
+	text = strings.TrimSpace(text)
+	if width < 20 {
+		width = 20
+	}
+	prefix := strings.Repeat(" ", pad)
+	var out []string
+	for _, para := range strings.Split(text, "\n") {
+		line := prefix
+		for _, word := range strings.Fields(para) {
+			if len(line)+len(word)+1 > width {
+				out = append(out, line)
+				line = prefix
+			}
+			line += word + " "
+		}
+		out = append(out, strings.TrimRight(line, " "))
+		if len(out) >= 8 {
+			break
+		}
+	}
+	if len(out) >= 8 {
+		out = append(out[:8], prefix+dimSty.Render("…"))
+	}
+	return strings.Join(out, "\n")
 }
 
 func truncate(s string, n int) string {

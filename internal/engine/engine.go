@@ -165,6 +165,65 @@ func retryPrompt(original string, rep validate.Report) string {
 	)
 }
 
+// Turn is the result of a quiet, non-interactive execution (for the TUI): the
+// agent ran, validation ran, and the diff is captured — but nothing was printed,
+// committed, or reviewed. The caller (TUI) decides what to do.
+type Turn struct {
+	Attempts   int
+	ExitCode   int
+	AgentText  string
+	Report     validate.Report
+	Diff       string
+	HadChanges bool
+	Err        error
+}
+
+// Produce runs dispatch → validate → self-correct quietly (no streaming, no
+// printing), captures the resulting diff, and returns it WITHOUT committing or
+// reviewing. Used by the dashboard's in-pane chat, which renders the result and
+// handles accept/reject itself.
+func Produce(ctx context.Context, opts Options) Turn {
+	var t Turn
+	prompt := opts.Prompt
+	maxAttempts := opts.MaxRetries + 1
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		t.Attempts = attempt
+		res, err := quietRun(ctx, opts.Agent, agent.Task{
+			Prompt:  taskGuardrail + opts.Principles + prompt,
+			Dir:     opts.Dir,
+			Timeout: opts.Timeout,
+		})
+		if err != nil {
+			t.Err = err
+			return t
+		}
+		t.ExitCode = res.ExitCode
+		t.AgentText = res.Output
+		t.Report = validate.RunPipeline(ctx, opts.Dir, opts.Stages)
+		if t.Report.Skipped || t.Report.Passed() || attempt == maxAttempts {
+			break
+		}
+		prompt = retryPrompt(opts.Prompt, t.Report)
+	}
+	diff, err := gitutil.Diff(opts.Dir)
+	if err != nil {
+		t.Err = err
+		return t
+	}
+	t.Diff = diff
+	t.HadChanges = diff != ""
+	return t
+}
+
+// quietRun runs a task capturing output (no streaming) when the agent supports
+// it, falling back to the streaming Run otherwise.
+func quietRun(ctx context.Context, a agent.Agent, task agent.Task) (agent.Result, error) {
+	if q, ok := a.(agent.QuietRunner); ok {
+		return q.RunQuiet(ctx, task)
+	}
+	return a.Run(ctx, task)
+}
+
 // runLoop performs the dispatch → validate → self-correct loop shared by the
 // interactive (Execute) and headless (ExecuteHeadless) paths.
 func runLoop(ctx context.Context, opts Options) (out Outcome, err error) {

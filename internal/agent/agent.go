@@ -71,6 +71,12 @@ type Prober interface {
 	Probe(ctx context.Context, timeout time.Duration) ProbeResult
 }
 
+// QuietRunner runs a task capturing all output (no streaming to the terminal) —
+// used by the TUI, where streaming would corrupt the alt-screen render.
+type QuietRunner interface {
+	RunQuiet(ctx context.Context, task Task) (Result, error)
+}
+
 // Has reports whether an agent has a given capability.
 func Has(a Agent, c Capability) bool {
 	for _, cap := range a.Capabilities() {
@@ -118,6 +124,12 @@ func (a *CLIAgent) Run(ctx context.Context, task Task) (Result, error) {
 func (a *CLIAgent) Query(ctx context.Context, task Task) (string, error) {
 	out, _, err := runner.RunCapture(ctx, a.spec(task))
 	return out, err
+}
+
+// RunQuiet runs the task capturing all output (nothing streamed) — for the TUI.
+func (a *CLIAgent) RunQuiet(ctx context.Context, task Task) (Result, error) {
+	out, r, err := runner.RunProbe(ctx, a.spec(task))
+	return Result{ExitCode: r.ExitCode, Duration: r.Duration, Output: out}, err
 }
 
 const probePrompt = "Reply with exactly the word OK and nothing else. Do not create or modify any files."

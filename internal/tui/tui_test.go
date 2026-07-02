@@ -9,6 +9,7 @@ import (
 
 	"github.com/crossben/orchestra/internal/agent"
 	"github.com/crossben/orchestra/internal/config"
+	"github.com/crossben/orchestra/internal/engine"
 )
 
 func testModel() Model {
@@ -123,5 +124,65 @@ func TestChatTabInNav(t *testing.T) {
 	m = nm.(Model)
 	if m.active != tabChat {
 		t.Fatalf("key 4 should select Chat, got %d", m.active)
+	}
+}
+
+// tab must navigate away even while typing (the reported bug).
+func TestChatTabNavigatesWhileTyping(t *testing.T) {
+	m := testModel()
+	m.active = tabChat
+	nm, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hello")})
+	m = nm.(Model)
+	nm, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = nm.(Model)
+	if m.active == tabChat {
+		t.Fatal("tab should navigate out of chat while typing")
+	}
+	if m.input != "hello" {
+		t.Fatalf("input should be preserved on nav, got %q", m.input)
+	}
+}
+
+func TestChatSubmitEntersRunning(t *testing.T) {
+	m := testModel()
+	m.active = tabChat
+	m.input = "do a thing"
+	nm, cmd := m.submitChat()
+	m = nm.(Model)
+	if m.cstate != chatRunning {
+		t.Fatalf("expected running state, got %d", m.cstate)
+	}
+	if cmd == nil {
+		t.Fatal("submit should return a command (spinner+produce)")
+	}
+	if len(m.messages) != 1 || m.messages[0].role != "you" {
+		t.Fatalf("user message not recorded: %+v", m.messages)
+	}
+}
+
+func TestOnTurnStates(t *testing.T) {
+	// no changes → idle + agent message
+	m := testModel()
+	m.cstate = chatRunning
+	nm, _ := m.onTurn(engine.Turn{HadChanges: false, AgentText: "here is an explanation"})
+	m = nm.(Model)
+	if m.cstate != chatIdle || m.messages[len(m.messages)-1].role != "agent" {
+		t.Fatalf("no-change turn should go idle with agent msg, got state=%d", m.cstate)
+	}
+	// changes → reviewing
+	m2 := testModel()
+	m2.cstate = chatRunning
+	nm2, _ := m2.onTurn(engine.Turn{HadChanges: true, Diff: "diff --git a b\n+x"})
+	m2 = nm2.(Model)
+	if m2.cstate != chatReviewing {
+		t.Fatalf("changed turn should enter reviewing, got %d", m2.cstate)
+	}
+	// error → idle + sys message
+	m3 := testModel()
+	m3.cstate = chatRunning
+	nm3, _ := m3.onTurn(engine.Turn{Err: errDirty})
+	m3 = nm3.(Model)
+	if m3.cstate != chatIdle || m3.messages[len(m3.messages)-1].role != "sys" {
+		t.Fatal("error turn should go idle with sys msg")
 	}
 }
