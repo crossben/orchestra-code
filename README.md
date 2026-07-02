@@ -119,6 +119,8 @@ data-driven routing. (Token/cost columns are deferred — agent CLIs don't repor
 
 Auto-approve is deliberate: *Orchestra's diff review is the human gate*, so agents must not block on their own permission prompts. Agents are also told to **proceed on reasonable assumptions rather than ask questions** (there's no interactive channel in headless mode). If an agent responds without editing anything, Orchestra detects it and — when the response looks like a question — prompts you to **refine your request and retry**, instead of silently reporting "nothing to review".
 
+**Lean-code principles.** Every task is prefixed with a configurable simplicity-first preamble (reuse before adding, no needless deps/abstractions, no unrequested features) so *any* agent writes smaller, cleaner changes — agent-agnostic, at the orchestration layer. Set `principles: off|lite|full` in config, or override per run with `--principles`. (Default `lite`.)
+
 ## Requirements
 
 - Go 1.22+
@@ -143,6 +145,7 @@ writes an `orchestra.yaml`:
 ```yaml
 default_agent: claude
 timeout: 10m
+principles: lite          # lean-code preamble injected into every task: off | lite | full
 
 # Validation pipeline — each result must pass before you review it. Leave stages
 # empty to auto-detect checks from the project; set them to override, or auto:false

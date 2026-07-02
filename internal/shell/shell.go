@@ -33,12 +33,13 @@ type Shell struct {
 	routing    bool   // AI routing on/off
 	router     *router.Router
 	mem        *memory.Store
+	principles string // lean-code preamble text (may be empty)
 	in         *bufio.Reader
 }
 
 // New builds a Shell. If rtr is non-nil and routingOn is true, messages are
 // auto-routed; otherwise the shell uses the fixed active agent.
-func New(reg *agent.Registry, dir, defaultAgent string, stages []validate.Stage, maxRetries int, timeout time.Duration, mem *memory.Store, rtr *router.Router, routingOn bool) *Shell {
+func New(reg *agent.Registry, dir, defaultAgent string, stages []validate.Stage, maxRetries int, timeout time.Duration, mem *memory.Store, rtr *router.Router, routingOn bool, principles string) *Shell {
 	return &Shell{
 		reg:        reg,
 		dir:        dir,
@@ -49,6 +50,7 @@ func New(reg *agent.Registry, dir, defaultAgent string, stages []validate.Stage,
 		routing:    routingOn && rtr != nil,
 		router:     rtr,
 		mem:        mem,
+		principles: principles,
 		in:         bufio.NewReader(os.Stdin),
 	}
 }
@@ -139,6 +141,7 @@ func (s *Shell) runTask(ctx context.Context, agentName, msg string) {
 		Timeout:        s.timeout,
 		CommitOnAccept: true,
 		Memory:         s.mem,
+		Principles:     s.principles,
 	})
 	if err != nil {
 		fmt.Printf("  error: %v\n", err)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/crossben/orchestra/internal/agent"
@@ -51,8 +52,37 @@ type Config struct {
 	Validate     ValidateConfig `yaml:"validate"`
 	MaxRetries   *int           `yaml:"max_retries"` // pointer so 0 (disable) differs from unset
 	Router       RouterConfig   `yaml:"router"`
-	Timeout      string         `yaml:"timeout"` // Go duration string, e.g. "10m"
+	Principles   string         `yaml:"principles"` // lean-code preamble intensity: off | lite | full
+	Timeout      string         `yaml:"timeout"`    // Go duration string, e.g. "10m"
 	Agents       []AgentConfig  `yaml:"agents"`
+}
+
+// Lean-code "principles" preambles (inspired by simplicity-first / anti-over-
+// engineering practice). Injected into every task so any agent produces leaner
+// changes, agent-agnostically.
+const (
+	principlesLite = "Prefer the simplest solution that works. Reuse what's already in the codebase and the " +
+		"standard library before adding anything; avoid new dependencies, speculative abstraction, and " +
+		"features that weren't asked for. Keep the change small.\n\n"
+
+	principlesFull = "Follow a strict simplicity-first discipline. Before writing code, in order: " +
+		"(1) question whether it needs to exist at all (YAGNI); (2) reuse existing code in this repo; " +
+		"(3) use the standard library; (4) use a native platform/runtime feature; (5) use an " +
+		"already-installed dependency; (6) prefer a small one-liner; (7) only then write the minimum " +
+		"custom code needed. Add no new dependencies, speculative abstractions, or unrequested features. " +
+		"Keep the diff as small as possible while preserving correctness, error handling, and security.\n\n"
+)
+
+// PrinciplesText returns the preamble for an intensity level ("" for off/unknown).
+func PrinciplesText(level string) string {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "full":
+		return principlesFull
+	case "lite":
+		return principlesLite
+	default:
+		return ""
+	}
 }
 
 // RouterEnabled reports whether the AI router is on (default true).
@@ -144,6 +174,8 @@ func Default() *Config {
 		DefaultAgent: "claude",
 		Timeout:      "10m",
 		MaxRetries:   &two,
+		Principles:   "lite", // gentle lean-code nudge on by default
+
 		Router: RouterConfig{
 			Enabled: &enabled,
 			Agent:   "claude",
@@ -242,6 +274,9 @@ func merge(base, user *Config) {
 	}
 	if user.MaxRetries != nil {
 		base.MaxRetries = user.MaxRetries
+	}
+	if user.Principles != "" {
+		base.Principles = user.Principles
 	}
 	if user.Router.Enabled != nil {
 		base.Router.Enabled = user.Router.Enabled

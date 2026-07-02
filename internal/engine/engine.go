@@ -45,6 +45,10 @@ type Options struct {
 	// Label prefixes progress output (used by parallel headless runs so lines
 	// from concurrent tasks are attributable). Empty for the interactive path.
 	Label string
+
+	// Principles is an optional lean-code preamble prepended to the task (see
+	// config.PrinciplesText). Empty = off.
+	Principles string
 }
 
 func (o Options) logf(format string, a ...any) {
@@ -178,7 +182,7 @@ func runLoop(ctx context.Context, opts Options) (out Outcome, err error) {
 		if opts.Label == "" {
 			fmt.Println(ui.Rule(48))
 		}
-		res, rerr := opts.Agent.Run(ctx, agent.Task{Prompt: taskGuardrail + prompt, Dir: opts.Dir, Timeout: opts.Timeout})
+		res, rerr := opts.Agent.Run(ctx, agent.Task{Prompt: taskGuardrail + opts.Principles + prompt, Dir: opts.Dir, Timeout: opts.Timeout})
 		if opts.Label == "" {
 			fmt.Println(ui.Rule(48))
 		}
