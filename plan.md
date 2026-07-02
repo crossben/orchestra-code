@@ -234,8 +234,10 @@ The nice-to-haves that make the project stand out — build only once the core i
   lines. Auto-disables color/animation when piped or `NO_COLOR` is set (regression stays green). The
   full-screen dashboard below is still the later, larger effort.
 - **TUI dashboard (Bubble Tea):** agents, tasks, logs, costs, timeline, current step.
-- **Benchmark mode:** run one task through every agent; measure speed, tokens, compile/test success,
-  diff size, retries; produce a leaderboard. (Feeds data-driven routing.)
+- **Benchmark mode ✅ DONE:** `orchestra benchmark "<task>"` runs the task through every available
+  agent, each in an isolated git worktree (parallel), then ranks a leaderboard by validation → retries
+  → speed → diff size, offers to merge the winner, and records results to SQLite (`benchmarks` table)
+  for future data-driven routing. Tokens/cost deferred (agent CLIs don't report usage generically).
 - **Context engine:** git diff + changed files + ranking + token estimation, so you don't send the
   whole repo every time. Add when context size actually becomes a problem, not before.
 - **Plugin SDK:** let others add agents (deepseek, aider, …) without touching core.

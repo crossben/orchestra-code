@@ -73,7 +73,61 @@ CREATE TABLE IF NOT EXISTS runs (
     attempts INTEGER NOT NULL,
     passed   INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_runs_dir ON runs(dir);`)
+CREATE INDEX IF NOT EXISTS idx_runs_dir ON runs(dir);
+
+CREATE TABLE IF NOT EXISTS benchmarks (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts         TEXT    NOT NULL,
+    dir        TEXT    NOT NULL,
+    task       TEXT    NOT NULL,
+    agent      TEXT    NOT NULL,
+    valid      INTEGER NOT NULL,
+    skipped    INTEGER NOT NULL,
+    changed    INTEGER NOT NULL,
+    duration_ms INTEGER NOT NULL,
+    retries    INTEGER NOT NULL,
+    files      INTEGER NOT NULL,
+    added      INTEGER NOT NULL,
+    removed    INTEGER NOT NULL,
+    exit       INTEGER NOT NULL,
+    won        INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bench_dir ON benchmarks(dir);`)
+	return err
+}
+
+// BenchRun is one agent's result in a benchmark.
+type BenchRun struct {
+	Dir      string
+	Task     string
+	Agent    string
+	Valid    bool
+	Skipped  bool // validation not configured/detected
+	Changed  bool // agent produced changes
+	Duration time.Duration
+	Retries  int
+	Files    int
+	Added    int
+	Removed  int
+	Exit     int
+	Won      bool
+}
+
+// RecordBenchmark stores one agent's benchmark result.
+func (s *Store) RecordBenchmark(r BenchRun, now time.Time) error {
+	b := func(v bool) int {
+		if v {
+			return 1
+		}
+		return 0
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO benchmarks (ts, dir, task, agent, valid, skipped, changed, duration_ms, retries, files, added, removed, exit, won)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		now.UTC().Format(time.RFC3339), r.Dir, r.Task, r.Agent,
+		b(r.Valid), b(r.Skipped), b(r.Changed), r.Duration.Milliseconds(), r.Retries,
+		r.Files, r.Added, r.Removed, r.Exit, b(r.Won),
+	)
 	return err
 }
 

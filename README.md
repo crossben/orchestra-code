@@ -81,6 +81,19 @@ orchestra history        # recent runs for this project + the agent you accept m
 orchestra history --all  # across all projects
 ```
 
+### Benchmark agents
+
+Run the **same task through every agent** (each isolated in its own worktree, in parallel) and rank them:
+
+```sh
+orchestra benchmark "add input validation to the login form"
+orchestra benchmark "..." --agents claude,mimo   # limit which agents
+```
+
+Produces a leaderboard sorted by **validation → fewer retries → faster → smaller diff**, then offers to
+merge the winner into your base tree. Results are recorded to memory (`benchmarks` table) to feed future
+data-driven routing. (Token/cost columns are deferred — agent CLIs don't report usage generically.)
+
 ## How it works (supervised loop)
 
 1. **Dispatch** the agent CLI in headless, auto-approve mode, streaming its output live.
@@ -169,6 +182,7 @@ A config file overrides defaults and adds agents; matching names replace the bui
 | `orchestra run`     | one-shot task dispatch                             |
 | `orchestra plan`    | decompose a request into ordered steps (no coding) |
 | `orchestra do`      | plan + execute steps (sequential, or --parallel)   |
+| `orchestra benchmark`| run one task through every agent, ranked leaderboard |
 | `orchestra history` | recent runs + preferred agent                      |
 | `orchestra agents`  | list agents; `--probe` live-tests each can actually run |
 | `orchestra init`    | write a starter `orchestra.yaml`                   |

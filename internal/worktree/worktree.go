@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -80,6 +81,32 @@ func (m *Manager) Diff(t Tree) (string, error) {
 		return "", err
 	}
 	return out, nil
+}
+
+// DiffStat returns the change footprint of the tree's branch vs the base HEAD:
+// number of files changed and lines added/removed.
+func (m *Manager) DiffStat(t Tree) (files, added, removed int, err error) {
+	out, gerr := m.git(m.repo, "diff", "--numstat", "HEAD..."+t.Branch)
+	if gerr != nil {
+		return 0, 0, 0, gerr
+	}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if line == "" {
+			continue
+		}
+		f := strings.Fields(line) // "<added> <removed> <file>" ("-" for binary)
+		if len(f) < 3 {
+			continue
+		}
+		files++
+		if n, e := strconv.Atoi(f[0]); e == nil {
+			added += n
+		}
+		if n, e := strconv.Atoi(f[1]); e == nil {
+			removed += n
+		}
+	}
+	return files, added, removed, nil
 }
 
 // Remove tears down a worktree and deletes its branch.
