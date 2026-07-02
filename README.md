@@ -106,6 +106,19 @@ Produces a leaderboard sorted by **validation → fewer retries → faster → s
 merge the winner into your base tree. Results are recorded to memory (`benchmarks` table) to feed future
 data-driven routing. (Token/cost columns are deferred — agent CLIs don't report usage generically.)
 
+**Prove the lean-code effect** — run each agent twice (principles off vs on) and see how much smaller the
+diff gets:
+
+```sh
+orchestra benchmark "add a settings page" --compare            # off vs full
+orchestra benchmark "..." --compare --principles lite          # off vs lite
+```
+```
+AGENT   VALID off/on  ±off   ±on   Δlines  Δ%
+claude  ✓/✓           +80-10 +41-3 -46     -51%
+▸ -47% fewer changed lines overall
+```
+
 ## How it works (supervised loop)
 
 1. **Dispatch** the agent CLI in headless, auto-approve mode, streaming its output live.
