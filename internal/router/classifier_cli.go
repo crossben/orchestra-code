@@ -42,10 +42,19 @@ Set "agent" only if one is clearly most suitable; otherwise leave it empty.
 
 User message: %s`
 
-// Classify queries the agent and parses its JSON verdict.
+// Classify queries the agent and parses its JSON verdict. It uses a quiet query
+// (stdout only, stderr discarded) so classification never prints stray output —
+// essential inside the TUI, and cleaner in the shell.
 func (c *CLIClassifier) Classify(ctx context.Context, message, dir string) (Classification, error) {
 	prompt := fmt.Sprintf(classifyTemplate, strings.Join(c.choices, ", "), message)
-	out, err := c.agent.Query(ctx, agent.Task{Prompt: prompt, Dir: dir, Timeout: c.timeout})
+	task := agent.Task{Prompt: prompt, Dir: dir, Timeout: c.timeout}
+	var out string
+	var err error
+	if q, ok := c.agent.(agent.QuietQuerier); ok {
+		out, err = q.QueryQuiet(ctx, task)
+	} else {
+		out, err = c.agent.Query(ctx, task)
+	}
 	if err != nil {
 		return Classification{}, err
 	}

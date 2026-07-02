@@ -93,10 +93,12 @@ Tabs: **Agents** (installed + live `p`robe of whether each can actually run), **
 **Benchmarks** (past leaderboards), and **Chat**. Keys: `tab` switch • `p` probe • `r` refresh • `q` quit.
 
 In the **Chat** tab you type in a proper input box; the agent runs **in the background** (spinner, no
-screen flip), then the diff appears in a **scrollable pane** for you to **accept** (`y`, commits) or
-**reject** (`n`, reverts). Validation + self-correction run first, so you review a result that already
-builds/tests when possible. The transcript scrolls (`↑/↓`, `pgup/pgdn`); `tab` navigates away anytime
-(even mid-typing); `esc` leaves chat. (Built on Charm's `viewport`/`textinput` for correct redraw.)
+screen flip), then the **syntax-highlighted diff** appears in a **scrollable pane** for you to **accept**
+(`y`, commits) or **reject** (`n`, reverts). Validation + self-correction run first. When the AI router is
+enabled, chat **auto-routes** each message to the best agent (or answers plain questions inline) with a
+`↳ routed to …` note; otherwise it uses the default agent. The transcript scrolls (`↑/↓`, `pgup/pgdn`);
+`tab` navigates away anytime (even mid-typing); `esc` leaves chat. (Built on Charm's `viewport`/`textinput`
+for correct redraw, and `chroma` for diff highlighting.)
 
 ### Benchmark agents
 

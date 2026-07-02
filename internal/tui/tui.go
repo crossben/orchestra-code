@@ -154,7 +154,10 @@ func (m Model) Init() tea.Cmd { return textinput.Blink }
 // --- messages ---
 
 type probeDoneMsg struct{ results map[string]agent.ProbeResult }
-type turnMsg struct{ turn engine.Turn }
+type turnMsg struct {
+	turn engine.Turn
+	note string // e.g. "routed to opencode — implementation"
+}
 type tickMsg struct{}
 
 func tickCmd() tea.Cmd {
@@ -197,21 +200,37 @@ func (m Model) produceCmd(text string) tea.Cmd {
 	d := m.d
 	return func() tea.Msg {
 		if !gitutil.IsRepo(d.Dir) {
-			return turnMsg{engine.Turn{Err: errNotRepo}}
+			return turnMsg{turn: engine.Turn{Err: errNotRepo}}
 		}
 		if clean, _ := gitutil.IsClean(d.Dir); !clean {
-			return turnMsg{engine.Turn{Err: errDirty}}
+			return turnMsg{turn: engine.Turn{Err: errDirty}}
 		}
-		ag, ok := d.Reg.Get(d.DefaultAgent)
+
+		agentName := d.DefaultAgent
+		note := ""
+		if d.RoutingOn && d.Router != nil {
+			dec := d.Router.Route(d.Ctx, text, d.Dir) // quiet: safe in the TUI
+			if dec.IsQuestion() {
+				ans, err := d.Router.Answer(d.Ctx, text, d.Dir, d.Timeout)
+				if err != nil {
+					return turnMsg{turn: engine.Turn{Err: err}}
+				}
+				return turnMsg{turn: engine.Turn{AgentText: ans, HadChanges: false}}
+			}
+			agentName = dec.Agent
+			note = fmt.Sprintf("↳ routed to %s — %s", dec.Agent, dec.Reason)
+		}
+
+		ag, ok := d.Reg.Get(agentName)
 		if !ok {
-			return turnMsg{engine.Turn{Err: fmt.Errorf("agent %q not available", d.DefaultAgent)}}
+			return turnMsg{turn: engine.Turn{Err: fmt.Errorf("agent %q not available", agentName)}}
 		}
 		t := engine.Produce(d.Ctx, engine.Options{
 			Agent: ag, Prompt: text, Dir: d.Dir,
 			Stages: d.Stages, MaxRetries: d.MaxRetries,
 			Timeout: d.Timeout, Principles: d.Principles,
 		})
-		return turnMsg{t}
+		return turnMsg{turn: t, note: note}
 	}
 }
 
@@ -235,7 +254,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case turnMsg:
-		return m.onTurn(msg.turn)
+		return m.onTurn(msg.turn, msg.note)
 	case tea.KeyMsg:
 		if m.active == tabChat {
 			return m.updateChat(msg)
@@ -338,7 +357,10 @@ func (m Model) submitChat() (tea.Model, tea.Cmd) {
 	return m, tea.Batch(tickCmd(), m.produceCmd(text))
 }
 
-func (m Model) onTurn(t engine.Turn) (tea.Model, tea.Cmd) {
+func (m Model) onTurn(t engine.Turn, note string) (tea.Model, tea.Cmd) {
+	if note != "" {
+		m.messages = append(m.messages, chatLine{"sys", note})
+	}
 	switch {
 	case t.Err != nil:
 		m.messages = append(m.messages, chatLine{"sys", "error: " + t.Err.Error()})
@@ -440,18 +462,7 @@ func (m Model) renderDiff() string {
 	default:
 		b.WriteString(badSty.Render("validation: ✗ failed") + "\n\n")
 	}
-	for _, ln := range strings.Split(m.pending.Diff, "\n") {
-		switch {
-		case strings.HasPrefix(ln, "+") && !strings.HasPrefix(ln, "+++"):
-			b.WriteString(addSty.Render(ln) + "\n")
-		case strings.HasPrefix(ln, "-") && !strings.HasPrefix(ln, "---"):
-			b.WriteString(delSty.Render(ln) + "\n")
-		case strings.HasPrefix(ln, "@@"):
-			b.WriteString(titleSty.Render(ln) + "\n")
-		default:
-			b.WriteString(dimSty.Render(ln) + "\n")
-		}
-	}
+	b.WriteString(highlightDiff(m.pending.Diff)) // chroma diff highlighting
 	return b.String()
 }
 
@@ -515,7 +526,11 @@ func (m Model) footer() string {
 }
 
 func (m Model) chatView() string {
-	head := headSty.Render("Chat") + dimSty.Render("   (agent: "+m.d.DefaultAgent+")")
+	mode := "agent: " + m.d.DefaultAgent
+	if m.d.RoutingOn && m.d.Router != nil {
+		mode = "AI routing on"
+	}
+	head := headSty.Render("Chat") + dimSty.Render("   ("+mode+")")
 	var bottom string
 	switch m.cstate {
 	case chatRunning:

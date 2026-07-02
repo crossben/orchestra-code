@@ -94,7 +94,11 @@ func (r *Router) Answer(ctx context.Context, message, dir string, timeout time.D
 		return "", fmt.Errorf("no agent available to answer questions")
 	}
 	prompt := "Answer the following question concisely. Do NOT modify any files.\n\nQuestion: " + message
-	return r.answerer.Query(ctx, agent.Task{Prompt: prompt, Dir: dir, Timeout: timeout})
+	task := agent.Task{Prompt: prompt, Dir: dir, Timeout: timeout}
+	if q, ok := r.answerer.(agent.QuietQuerier); ok {
+		return q.QueryQuiet(ctx, task) // quiet: safe inside the TUI, cleaner in the shell
+	}
+	return r.answerer.Query(ctx, task)
 }
 
 // resolve applies the three-tier fallback, choosing only healthy agents.

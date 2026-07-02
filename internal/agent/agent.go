@@ -77,6 +77,12 @@ type QuietRunner interface {
 	RunQuiet(ctx context.Context, task Task) (Result, error)
 }
 
+// QuietQuerier answers a prompt capturing stdout and discarding stderr — a quiet
+// Query for routing/classification (safe inside the TUI).
+type QuietQuerier interface {
+	QueryQuiet(ctx context.Context, task Task) (string, error)
+}
+
 // Has reports whether an agent has a given capability.
 func Has(a Agent, c Capability) bool {
 	for _, cap := range a.Capabilities() {
@@ -130,6 +136,12 @@ func (a *CLIAgent) Query(ctx context.Context, task Task) (string, error) {
 func (a *CLIAgent) RunQuiet(ctx context.Context, task Task) (Result, error) {
 	out, r, err := runner.RunProbe(ctx, a.spec(task))
 	return Result{ExitCode: r.ExitCode, Duration: r.Duration, Output: out}, err
+}
+
+// QueryQuiet captures stdout and discards stderr — for routing/classification.
+func (a *CLIAgent) QueryQuiet(ctx context.Context, task Task) (string, error) {
+	out, _, err := runner.RunCaptureQuiet(ctx, a.spec(task))
+	return out, err
 }
 
 const probePrompt = "Reply with exactly the word OK and nothing else. Do not create or modify any files."

@@ -165,7 +165,7 @@ func TestOnTurnStates(t *testing.T) {
 	// no changes → idle + agent message
 	m := testModel()
 	m.cstate = chatRunning
-	nm, _ := m.onTurn(engine.Turn{HadChanges: false, AgentText: "here is an explanation"})
+	nm, _ := m.onTurn(engine.Turn{HadChanges: false, AgentText: "here is an explanation"}, "")
 	m = nm.(Model)
 	if m.cstate != chatIdle || m.messages[len(m.messages)-1].role != "agent" {
 		t.Fatalf("no-change turn should go idle with agent msg, got state=%d", m.cstate)
@@ -173,7 +173,7 @@ func TestOnTurnStates(t *testing.T) {
 	// changes → reviewing
 	m2 := testModel()
 	m2.cstate = chatRunning
-	nm2, _ := m2.onTurn(engine.Turn{HadChanges: true, Diff: "diff --git a b\n+x"})
+	nm2, _ := m2.onTurn(engine.Turn{HadChanges: true, Diff: "diff --git a b\n+x"}, "")
 	m2 = nm2.(Model)
 	if m2.cstate != chatReviewing {
 		t.Fatalf("changed turn should enter reviewing, got %d", m2.cstate)
@@ -181,7 +181,7 @@ func TestOnTurnStates(t *testing.T) {
 	// error → idle + sys message
 	m3 := testModel()
 	m3.cstate = chatRunning
-	nm3, _ := m3.onTurn(engine.Turn{Err: errDirty})
+	nm3, _ := m3.onTurn(engine.Turn{Err: errDirty}, "")
 	m3 = nm3.(Model)
 	if m3.cstate != chatIdle || m3.messages[len(m3.messages)-1].role != "sys" {
 		t.Fatal("error turn should go idle with sys msg")
