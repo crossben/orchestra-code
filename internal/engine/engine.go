@@ -57,7 +57,8 @@ func (o Options) logf(format string, a ...any) {
 // Outcome reports what happened.
 type Outcome struct {
 	Attempts   int
-	ExitCode   int // last agent exit code (0 = clean; <0 = killed by signal/timeout)
+	ExitCode   int    // last agent exit code (0 = clean; <0 = killed by signal/timeout)
+	AgentText  string // combined output the agent produced (for #2 question detection)
 	Report     validate.Report
 	HadChanges bool
 	Accepted   bool
@@ -84,7 +85,7 @@ func Execute(ctx context.Context, in *bufio.Reader, opts Options) (out Outcome, 
 		return out, fmt.Errorf("compute diff: %w", err)
 	}
 	if diff == "" {
-		fmt.Println(ui.Dim("▸ no changes to the working tree; nothing to review"))
+		noChangeNotice(opts, out)
 		return out, nil
 	}
 	out.HadChanges = true
@@ -107,6 +108,45 @@ func Execute(ctx context.Context, in *bufio.Reader, opts Options) (out Outcome, 
 	}
 	fmt.Println(ui.Warn("↺ changes rejected — working tree restored"))
 	return out, nil
+}
+
+// taskGuardrail (#1) is prepended to every task so headless agents proceed on
+// reasonable assumptions instead of stalling to ask questions they can't be
+// answered (there is no interactive channel in headless mode).
+const taskGuardrail = "You are running non-interactively and cannot ask follow-up questions. " +
+	"Make reasonable assumptions and implement the task; record any important assumptions as brief " +
+	"code comments rather than asking for confirmation. Do not wait for input.\n\n"
+
+// noChangeNotice (#2) explains an empty diff. If the agent produced substantial
+// output but edited nothing, it likely asked a question or hit an obstacle —
+// surface that (and, in a question-shaped case, a hint to clarify) instead of a
+// terse "nothing to review" that hides the real situation.
+func noChangeNotice(opts Options, out Outcome) {
+	text := strings.TrimSpace(out.AgentText)
+	if len(text) < 200 {
+		opts.logf(ui.Dim("▸ the agent made no changes; nothing to review"))
+		return
+	}
+	if looksLikeQuestion(text) {
+		opts.logf(ui.Warn("▸ the agent responded without editing any files — it may need clarification."))
+		opts.logf(ui.Dim("  refine your request (add the missing detail) and try again."))
+	} else {
+		opts.logf(ui.Warn("▸ the agent responded without editing any files (see its output above)."))
+	}
+}
+
+// looksLikeQuestion heuristically detects a clarifying-question response.
+func looksLikeQuestion(text string) bool {
+	if strings.Contains(text, "?") {
+		return true
+	}
+	lower := strings.ToLower(text)
+	for _, kw := range []string{"could you", "which ", "do you want", "please clarify", "should i", "unclear", "provide more"} {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
 }
 
 // retryPrompt asks the agent to fix the failing check, keeping the original goal
@@ -138,7 +178,7 @@ func runLoop(ctx context.Context, opts Options) (out Outcome, err error) {
 		if opts.Label == "" {
 			fmt.Println(ui.Rule(48))
 		}
-		res, rerr := opts.Agent.Run(ctx, agent.Task{Prompt: prompt, Dir: opts.Dir, Timeout: opts.Timeout})
+		res, rerr := opts.Agent.Run(ctx, agent.Task{Prompt: taskGuardrail + prompt, Dir: opts.Dir, Timeout: opts.Timeout})
 		if opts.Label == "" {
 			fmt.Println(ui.Rule(48))
 		}
@@ -146,6 +186,7 @@ func runLoop(ctx context.Context, opts Options) (out Outcome, err error) {
 			return out, fmt.Errorf("agent %q failed to run: %w", opts.Agent.Name(), rerr)
 		}
 		out.ExitCode = res.ExitCode
+		out.AgentText = res.Output
 		opts.logf("%s agent exited with code %d in %s", ui.Accent("▸"), res.ExitCode,
 			ui.Dim(res.Duration.Round(time.Millisecond).String()))
 
@@ -183,7 +224,7 @@ func ExecuteHeadless(ctx context.Context, opts Options) (out Outcome, err error)
 		return out, fmt.Errorf("compute diff: %w", derr)
 	}
 	if diff == "" {
-		opts.logf(ui.Dim("▸ no changes produced"))
+		noChangeNotice(opts, out)
 		return out, nil
 	}
 	out.HadChanges = true

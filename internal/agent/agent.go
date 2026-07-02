@@ -40,6 +40,7 @@ type Task struct {
 type Result struct {
 	ExitCode int
 	Duration time.Duration
+	Output   string // combined stdout+stderr the agent produced (for question detection)
 }
 
 // Agent is anything Orchestra can dispatch a Task to.
@@ -109,8 +110,8 @@ func (a *CLIAgent) Health() error {
 
 // Run dispatches the task to the CLI via the runner.
 func (a *CLIAgent) Run(ctx context.Context, task Task) (Result, error) {
-	r, err := runner.Run(ctx, a.spec(task))
-	return Result{ExitCode: r.ExitCode, Duration: r.Duration}, err
+	out, r, err := runner.Run(ctx, a.spec(task))
+	return Result{ExitCode: r.ExitCode, Duration: r.Duration, Output: out}, err
 }
 
 // Query runs the CLI and captures its stdout (for planning / decomposition).

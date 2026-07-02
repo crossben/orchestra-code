@@ -92,7 +92,7 @@ orchestra history --all  # across all projects
 4. **Review** — show the git diff + per-stage validation report and ask you to **accept** or **reject**.
 5. **Accept** keeps the changes (the shell commits them); **reject** restores the tree exactly.
 
-Auto-approve is deliberate: *Orchestra's diff review is the human gate*, so agents must not block on their own permission prompts.
+Auto-approve is deliberate: *Orchestra's diff review is the human gate*, so agents must not block on their own permission prompts. Agents are also told to **proceed on reasonable assumptions rather than ask questions** (there's no interactive channel in headless mode). If an agent responds without editing anything, Orchestra detects it and — when the response looks like a question — prompts you to **refine your request and retry**, instead of silently reporting "nothing to review".
 
 ## Requirements
 
@@ -170,7 +170,7 @@ A config file overrides defaults and adds agents; matching names replace the bui
 | `orchestra plan`    | decompose a request into ordered steps (no coding) |
 | `orchestra do`      | plan + execute steps (sequential, or --parallel)   |
 | `orchestra history` | recent runs + preferred agent                      |
-| `orchestra agents`  | list agents and availability                       |
+| `orchestra agents`  | list agents; `--probe` live-tests each can actually run |
 | `orchestra init`    | write a starter `orchestra.yaml`                   |
 
 `run` flags: `--agent`, `--test`, `--retries`, `--timeout`, `--force`. `do`: `--agent`, `--yes`, `--parallel`, `--jobs`. Global: `--dir`.
