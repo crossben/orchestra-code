@@ -106,3 +106,41 @@ func RunCapture(ctx context.Context, spec Spec) (string, Result, error) {
 	}
 	return out, Result{ExitCode: 0, Duration: dur}, nil
 }
+
+// RunProbe runs the spec quietly — capturing stdout AND stderr into one buffer,
+// streaming nothing — and returns the combined output. Used by the health probe
+// so an agent's diagnostic text (e.g. "insufficient balance") is captured for
+// reporting rather than spilled to the terminal.
+func RunProbe(ctx context.Context, spec Spec) (string, Result, error) {
+	if spec.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, spec.Timeout)
+		defer cancel()
+	}
+
+	var buf bytes.Buffer
+	cmd := exec.CommandContext(ctx, spec.Bin, spec.Args...)
+	cmd.Dir = spec.Dir
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	cmd.Env = append(os.Environ(), spec.Env...)
+
+	start := time.Now()
+	err := cmd.Run()
+	dur := time.Since(start)
+	out := buf.String()
+
+	if ctx.Err() == context.DeadlineExceeded {
+		return out, Result{ExitCode: -1, Duration: dur}, fmt.Errorf("timed out after %s", spec.Timeout)
+	}
+	if ctx.Err() == context.Canceled {
+		return out, Result{ExitCode: -1, Duration: dur}, context.Canceled
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		return out, Result{ExitCode: exitErr.ExitCode(), Duration: dur}, nil
+	}
+	if err != nil {
+		return out, Result{ExitCode: -1, Duration: dur}, err
+	}
+	return out, Result{ExitCode: 0, Duration: dur}, nil
+}

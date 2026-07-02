@@ -8,8 +8,12 @@ package agent
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/crossben/orchestra/internal/runner"
@@ -53,6 +57,19 @@ type Querier interface {
 	Query(ctx context.Context, task Task) (string, error)
 }
 
+// ProbeResult reports whether an agent can actually do work (not just that its
+// binary exists): OK means it responded; otherwise Detail explains the failure
+// (timeout, auth/billing error, etc.).
+type ProbeResult struct {
+	OK     bool
+	Detail string
+}
+
+// Prober is an agent that can be health-probed with a trivial live task.
+type Prober interface {
+	Probe(ctx context.Context, timeout time.Duration) ProbeResult
+}
+
 // Has reports whether an agent has a given capability.
 func Has(a Agent, c Capability) bool {
 	for _, cap := range a.Capabilities() {
@@ -68,15 +85,17 @@ func Has(a Agent, c Capability) bool {
 // argument. Auto-approve is deliberate: Orchestra's diff review is the human
 // gate, so the agent itself must not block on its own permission prompts.
 type CLIAgent struct {
-	name string
-	bin  string
-	args []string
-	caps []Capability
+	name    string
+	bin     string
+	args    []string
+	dirFlag string // if set, inject "<dirFlag> <abs dir>" so CLIs that ignore cwd still isolate
+	caps    []Capability
 }
 
-// New builds a CLIAgent.
-func New(name, bin string, args []string, caps []Capability) *CLIAgent {
-	return &CLIAgent{name: name, bin: bin, args: args, caps: caps}
+// New builds a CLIAgent. dirFlag (may be empty) is the flag an agent needs to be
+// told its working directory — some CLIs (e.g. opencode) ignore the process cwd.
+func New(name, bin string, args []string, dirFlag string, caps []Capability) *CLIAgent {
+	return &CLIAgent{name: name, bin: bin, args: args, dirFlag: dirFlag, caps: caps}
 }
 
 func (a *CLIAgent) Name() string               { return a.name }
@@ -100,11 +119,83 @@ func (a *CLIAgent) Query(ctx context.Context, task Task) (string, error) {
 	return out, err
 }
 
+const probePrompt = "Reply with exactly the word OK and nothing else. Do not create or modify any files."
+
+// Probe runs a trivial live task in a throwaway directory to check the agent can
+// actually work — catching auth/billing errors and hangs that a binary-on-PATH
+// check misses.
+func (a *CLIAgent) Probe(ctx context.Context, timeout time.Duration) ProbeResult {
+	dir, err := os.MkdirTemp("", "orchestra-probe-")
+	if err != nil {
+		return ProbeResult{OK: false, Detail: "cannot create temp dir: " + err.Error()}
+	}
+	defer os.RemoveAll(dir)
+
+	out, res, err := runner.RunProbe(ctx, a.spec(Task{Prompt: probePrompt, Dir: dir, Timeout: timeout}))
+	switch {
+	case err != nil:
+		return ProbeResult{OK: false, Detail: firstMeaningfulLine(err.Error())}
+	case res.ExitCode != 0:
+		detail := firstMeaningfulLine(out)
+		if detail == "" {
+			detail = fmt.Sprintf("exited with code %d", res.ExitCode)
+		}
+		return ProbeResult{OK: false, Detail: detail}
+	default:
+		return ProbeResult{OK: true, Detail: "responded"}
+	}
+}
+
+// firstMeaningfulLine returns a short, human-useful snippet from agent output:
+// the last non-empty line (errors usually land last), trimmed of ANSI noise.
+func firstMeaningfulLine(s string) string {
+	lines := strings.Split(s, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		t := strings.TrimSpace(stripANSI(lines[i]))
+		if t != "" {
+			if len(t) > 120 {
+				t = t[:117] + "…"
+			}
+			return t
+		}
+	}
+	return ""
+}
+
+// stripANSI removes basic ANSI escape sequences so probe detail is readable.
+func stripANSI(s string) string {
+	var b strings.Builder
+	inEsc := false
+	for _, r := range s {
+		if inEsc {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+				inEsc = false
+			}
+			continue
+		}
+		if r == 0x1b {
+			inEsc = true
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 func (a *CLIAgent) spec(task Task) runner.Spec {
+	dir := task.Dir
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	args := slices.Clone(a.args)
+	if a.dirFlag != "" {
+		args = append(args, a.dirFlag, dir) // tell cwd-ignoring CLIs where to work
+	}
+	args = append(args, task.Prompt)
 	return runner.Spec{
 		Bin:     a.bin,
-		Args:    append(slices.Clone(a.args), task.Prompt),
-		Dir:     task.Dir,
+		Args:    args,
+		Dir:     dir,
 		Timeout: task.Timeout,
 	}
 }

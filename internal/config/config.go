@@ -23,6 +23,7 @@ type AgentConfig struct {
 	Name         string   `yaml:"name"`
 	Bin          string   `yaml:"bin"`          // binary on PATH (defaults to Name)
 	Args         []string `yaml:"args"`         // headless/auto-approve prefix; task appended
+	DirFlag      string   `yaml:"dir_flag"`     // flag to pass the working dir (for CLIs that ignore cwd, e.g. opencode "--dir")
 	Capabilities []string `yaml:"capabilities"` // plan|implement|review
 }
 
@@ -163,6 +164,7 @@ func Default() *Config {
 				Name:         "opencode",
 				Bin:          "opencode",
 				Args:         []string{"run", "--dangerously-skip-permissions"},
+				DirFlag:      "--dir", // opencode ignores process cwd; must be told its dir
 				Capabilities: []string{"implement", "review"},
 			},
 			{
@@ -302,7 +304,7 @@ func (c *Config) BuildRegistry() *agent.Registry {
 		for _, cp := range ac.Capabilities {
 			caps = append(caps, agent.Capability(cp))
 		}
-		reg.Add(agent.New(ac.Name, bin, ac.Args, caps))
+		reg.Add(agent.New(ac.Name, bin, ac.Args, ac.DirFlag, caps))
 	}
 	return reg
 }

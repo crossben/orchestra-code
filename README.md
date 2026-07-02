@@ -146,12 +146,18 @@ agents:
   - name: opencode
     bin: opencode
     args: ["run", "--dangerously-skip-permissions"]
+    dir_flag: "--dir"   # for CLIs that ignore process cwd — required for parallel worktree isolation
     capabilities: [implement, review]
   - name: mimo
     bin: mimo
     args: ["run", "--dangerously-skip-permissions"]
     capabilities: [implement, review]
 ```
+
+> **`dir_flag`** tells Orchestra how to pass an agent its working directory. Most CLIs honor the process
+> cwd, but some (e.g. opencode) don't — set `dir_flag` so parallel worktrees stay isolated. Orchestra
+> also guards the base tree: if an agent writes outside its worktree anyway, the stray changes are
+> discarded before merge so one misbehaving agent can't break the wave.
 
 A config file overrides defaults and adds agents; matching names replace the built-in entry.
 
