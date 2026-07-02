@@ -90,8 +90,11 @@ orchestra dashboard      # or: orchestra dash
 ```
 
 Tabs: **Agents** (installed + live `p`robe of whether each can actually run), **History** (recent runs),
-**Benchmarks** (past leaderboards). Keys: `tab` switch • `p` probe • `r` refresh • `q` quit. It's a
-read-only monitor over config + memory. *(Live in-run monitoring is a planned follow-up.)*
+**Benchmarks** (past leaderboards), and **Chat**. Keys: `tab` switch • `p` probe • `r` refresh • `q` quit.
+
+In the **Chat** tab you type a message and press `enter`; the dashboard hands the terminal to the full
+supervised engine (route → run → validate → accept/reject, same as the shell), then returns and refreshes
+history. So the monitor is also an interactive agent chat. *(Live in-render streaming is a further follow-up.)*
 
 ### Benchmark agents
 

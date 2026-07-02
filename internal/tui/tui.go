@@ -1,13 +1,17 @@
-// Package tui is Orchestra's read-only dashboard — a Bubble Tea full-screen view
-// over your agents (with live health probing), run history, and benchmark
-// results. It observes state (config + SQLite memory); it does not launch work.
-// Live in-run monitoring is a future addition that needs the engine to emit
-// events.
+// Package tui is Orchestra's dashboard — a Bubble Tea full-screen view over your
+// agents (with live health probing), run history, and benchmark results, plus a
+// Chat tab. Chat hands the terminal to the full supervised engine (via tea.Exec)
+// so you get the same route → run → validate → accept/reject flow as the shell,
+// then returns to the dashboard. It observes state (config + SQLite memory) and,
+// on chat, drives the real engine — it does not reimplement chat in the render loop.
 package tui
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -17,8 +21,12 @@ import (
 
 	"github.com/crossben/orchestra/internal/agent"
 	"github.com/crossben/orchestra/internal/config"
+	"github.com/crossben/orchestra/internal/engine"
+	"github.com/crossben/orchestra/internal/gitutil"
 	"github.com/crossben/orchestra/internal/memory"
+	"github.com/crossben/orchestra/internal/router"
 	"github.com/crossben/orchestra/internal/scheduler"
+	"github.com/crossben/orchestra/internal/validate"
 )
 
 type tab int
@@ -27,9 +35,10 @@ const (
 	tabAgents tab = iota
 	tabHistory
 	tabBench
+	tabChat
 )
 
-var tabNames = []string{"Agents", "History", "Benchmarks"}
+var tabNames = []string{"Agents", "History", "Benchmarks", "Chat"}
 
 // palette (cyan → violet accents, semantic green/red).
 var (
@@ -47,15 +56,29 @@ var (
 	okSty     = lipgloss.NewStyle().Foreground(green).Bold(true)
 	badSty    = lipgloss.NewStyle().Foreground(red).Bold(true)
 	footerSty = lipgloss.NewStyle().Foreground(gray)
+	promptSty = lipgloss.NewStyle().Foreground(accent).Bold(true)
 )
+
+// Deps bundles everything the dashboard needs (read-only data + the engine
+// dependencies for the Chat tab).
+type Deps struct {
+	Ctx          context.Context
+	Cfg          *config.Config
+	Reg          *agent.Registry
+	Mem          *memory.Store
+	Dir          string
+	Router       *router.Router
+	RoutingOn    bool
+	Stages       []validate.Stage
+	MaxRetries   int
+	Timeout      time.Duration
+	Principles   string
+	DefaultAgent string
+}
 
 // Model is the dashboard state.
 type Model struct {
-	cfg *config.Config
-	reg *agent.Registry
-	mem *memory.Store
-	dir string
-
+	d             Deps
 	active        tab
 	width, height int
 
@@ -65,17 +88,15 @@ type Model struct {
 	probing bool
 	probed  map[string]agent.ProbeResult
 
+	input  string // chat input buffer
 	status string
 }
 
 // New builds the dashboard model, loading initial data from memory.
-func New(cfg *config.Config, reg *agent.Registry, mem *memory.Store, dir string) Model {
+func New(d Deps) Model {
 	m := Model{
-		cfg:    cfg,
-		reg:    reg,
-		mem:    mem,
-		dir:    dir,
-		width:  80, // sensible defaults until the first WindowSizeMsg arrives
+		d:      d,
+		width:  80,
 		height: 24,
 		probed: map[string]agent.ProbeResult{},
 	}
@@ -84,13 +105,13 @@ func New(cfg *config.Config, reg *agent.Registry, mem *memory.Store, dir string)
 }
 
 func (m *Model) reload() {
-	if m.mem == nil {
+	if m.d.Mem == nil {
 		return
 	}
-	if r, err := m.mem.Recent(m.dir, 100); err == nil {
+	if r, err := m.d.Mem.Recent(m.d.Dir, 100); err == nil {
 		m.runs = r
 	}
-	if b, err := m.mem.RecentBenchmarks(m.dir, 100); err == nil {
+	if b, err := m.d.Mem.RecentBenchmarks(m.d.Dir, 100); err == nil {
 		m.benches = b
 	}
 }
@@ -100,9 +121,10 @@ func (m Model) Init() tea.Cmd { return nil }
 // --- messages ---
 
 type probeDoneMsg struct{ results map[string]agent.ProbeResult }
+type chatDoneMsg struct{ err error }
 
 func (m Model) probeCmd() tea.Cmd {
-	agents := m.reg.All()
+	agents := m.d.Reg.All()
 	return func() tea.Msg {
 		results := map[string]agent.ProbeResult{}
 		var mu sync.Mutex
@@ -136,20 +158,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.probed = msg.results
 		m.probing = false
 		m.status = "probe complete"
+	case chatDoneMsg:
+		m.reload()
+		if msg.err != nil {
+			m.status = "error: " + msg.err.Error()
+		} else {
+			m.status = "done — history updated"
+		}
 	case tea.KeyMsg:
+		if m.active == tabChat {
+			return m.updateChat(msg)
+		}
 		switch msg.String() {
 		case "q", "ctrl+c", "esc":
 			return m, tea.Quit
 		case "tab", "right", "l":
-			m.active = (m.active + 1) % 3
+			m.active = (m.active + 1) % 4
 		case "shift+tab", "left", "h":
-			m.active = (m.active + 2) % 3
+			m.active = (m.active + 3) % 4
 		case "1":
 			m.active = tabAgents
 		case "2":
 			m.active = tabHistory
 		case "3":
 			m.active = tabBench
+		case "4":
+			m.active = tabChat
 		case "r":
 			m.reload()
 			m.status = "refreshed"
@@ -164,10 +198,47 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) View() string {
-	if m.width == 0 {
-		return "loading…"
+// updateChat handles keys while the Chat tab's input is focused.
+func (m Model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	case tea.KeyEsc:
+		m.active = tabAgents
+	case tea.KeyEnter:
+		return m.submitChat()
+	case tea.KeyBackspace:
+		if n := len(m.input); n > 0 {
+			r := []rune(m.input)
+			m.input = string(r[:len(r)-1])
+		}
+	case tea.KeySpace:
+		m.input += " "
+	case tea.KeyRunes:
+		m.input += string(msg.Runes)
 	}
+	return m, nil
+}
+
+// submitChat hands the terminal to the supervised engine for one turn.
+func (m Model) submitChat() (tea.Model, tea.Cmd) {
+	text := strings.TrimSpace(m.input)
+	if text == "" {
+		return m, nil
+	}
+	m.input = ""
+	m.status = "running…"
+	ex := &engineExec{
+		ctx: m.d.Ctx, dir: m.d.Dir, msg: text,
+		reg: m.d.Reg, current: m.d.DefaultAgent,
+		router: m.d.Router, routingOn: m.d.RoutingOn,
+		stages: m.d.Stages, maxRetries: m.d.MaxRetries,
+		timeout: m.d.Timeout, principles: m.d.Principles, mem: m.d.Mem,
+	}
+	return m, tea.Exec(ex, func(err error) tea.Msg { return chatDoneMsg{err: err} })
+}
+
+func (m Model) View() string {
 	var b strings.Builder
 	b.WriteString(m.header())
 	b.WriteString("\n\n")
@@ -178,6 +249,8 @@ func (m Model) View() string {
 		b.WriteString(m.historyView())
 	case tabBench:
 		b.WriteString(m.benchView())
+	case tabChat:
+		b.WriteString(m.chatView())
 	}
 	b.WriteString("\n")
 	b.WriteString(m.footer())
@@ -200,8 +273,11 @@ func (m Model) header() string {
 
 func (m Model) footer() string {
 	keys := "tab: switch • r: refresh • q: quit"
-	if m.active == tabAgents {
+	switch m.active {
+	case tabAgents:
 		keys = "tab: switch • p: probe agents • r: refresh • q: quit"
+	case tabChat:
+		keys = "type a message • enter: send • esc: back • ctrl+c: quit"
 	}
 	status := ""
 	if m.status != "" {
@@ -213,7 +289,7 @@ func (m Model) footer() string {
 func (m Model) agentsView() string {
 	var b strings.Builder
 	b.WriteString(headSty.Render(fmt.Sprintf("%-12s %-14s %-22s %s", "AGENT", "INSTALLED", "PROBE", "CAPABILITIES")) + "\n")
-	for _, a := range m.reg.All() {
+	for _, a := range m.d.Reg.All() {
 		installed := okSty.Render("✓")
 		if a.Health() != nil {
 			installed = dimSty.Render("✗")
@@ -230,7 +306,7 @@ func (m Model) agentsView() string {
 			}
 		}
 		name := a.Name()
-		if name == m.cfg.DefaultAgent {
+		if name == m.d.DefaultAgent {
 			name += "*"
 		}
 		b.WriteString(fmt.Sprintf("%-12s %-14s %-22s %s\n",
@@ -242,7 +318,7 @@ func (m Model) agentsView() string {
 
 func (m Model) historyView() string {
 	if len(m.runs) == 0 {
-		return dimSty.Render("no run history yet — try `orchestra run` or `orchestra do`")
+		return dimSty.Render("no run history yet — try the Chat tab, `orchestra run`, or `orchestra do`")
 	}
 	var b strings.Builder
 	b.WriteString(headSty.Render(fmt.Sprintf("%-17s %-10s %-10s %-4s %s", "WHEN", "AGENT", "OUTCOME", "ATT", "TASK")) + "\n")
@@ -250,14 +326,12 @@ func (m Model) historyView() string {
 		if m.linesShown(&b) {
 			break
 		}
-		outcome := r.Outcome
+		outcome := dimSty.Render(r.Outcome)
 		switch r.Outcome {
 		case "accepted":
 			outcome = okSty.Render("accepted")
 		case "rejected":
 			outcome = badSty.Render("rejected")
-		default:
-			outcome = dimSty.Render(r.Outcome)
 		}
 		b.WriteString(fmt.Sprintf("%-17s %-10s %-10s %-4d %s\n",
 			r.Time.Local().Format("01-02 15:04:05"), r.Agent, outcome, r.Attempts, truncate(firstLine(r.Prompt), m.taskWidth())))
@@ -272,6 +346,9 @@ func (m Model) benchView() string {
 	var b strings.Builder
 	b.WriteString(headSty.Render(fmt.Sprintf("%-17s %-10s %-6s %-6s %-8s %s", "WHEN", "AGENT", "WON", "VALID", "TIME", "TASK")) + "\n")
 	for _, r := range m.benches {
+		if m.linesShown(&b) {
+			break
+		}
 		won := dimSty.Render("")
 		if r.Won {
 			won = okSty.Render("★")
@@ -287,6 +364,107 @@ func (m Model) benchView() string {
 	return b.String()
 }
 
+func (m Model) chatView() string {
+	var b strings.Builder
+	mode := "agent: " + m.d.DefaultAgent
+	if m.d.RoutingOn && m.d.Router != nil {
+		mode = "AI routing on"
+	}
+	b.WriteString(headSty.Render("Chat") + dimSty.Render("   ("+mode+")") + "\n\n")
+	b.WriteString(promptSty.Render("› ") + m.input + dimSty.Render("▏") + "\n\n")
+	b.WriteString(dimSty.Render("press enter to send this to the agent — it runs the full supervised loop\n" +
+		"(route → run → validate → accept/reject) on the terminal, then returns here.\n"))
+
+	// A little recent activity for context.
+	if len(m.runs) > 0 {
+		b.WriteString("\n" + dimSty.Render("recent:") + "\n")
+		for i, r := range m.runs {
+			if i >= 5 {
+				break
+			}
+			b.WriteString(dimSty.Render(fmt.Sprintf("  %s  %-8s  %s  %s\n",
+				r.Time.Local().Format("15:04:05"), r.Agent, r.Outcome, truncate(firstLine(r.Prompt), 40))))
+		}
+	}
+	return b.String()
+}
+
+// engineExec runs one supervised chat turn on the released terminal.
+type engineExec struct {
+	ctx        context.Context
+	dir        string
+	msg        string
+	reg        *agent.Registry
+	current    string
+	router     *router.Router
+	routingOn  bool
+	stages     []validate.Stage
+	maxRetries int
+	timeout    time.Duration
+	principles string
+	mem        *memory.Store
+}
+
+func (e *engineExec) SetStdin(io.Reader)  {}
+func (e *engineExec) SetStdout(io.Writer) {}
+func (e *engineExec) SetStderr(io.Writer) {}
+
+func (e *engineExec) Run() error {
+	if !gitutil.IsRepo(e.dir) {
+		fmt.Println("orchestra: not a git repository — chat needs one for the supervised loop")
+		return waitEnter()
+	}
+	if clean, _ := gitutil.IsClean(e.dir); !clean {
+		fmt.Println("orchestra: working tree has uncommitted changes — commit/stash first")
+		return waitEnter()
+	}
+
+	in := bufio.NewReader(os.Stdin)
+	ag, ok := e.reg.Get(e.current)
+
+	// Route if enabled.
+	if e.router != nil && e.routingOn {
+		d := e.router.Route(e.ctx, e.msg, e.dir)
+		if d.IsQuestion() {
+			if ans, err := e.router.Answer(e.ctx, e.msg, e.dir, e.timeout); err == nil {
+				fmt.Println(strings.TrimSpace(ans))
+			}
+			return waitEnter()
+		}
+		if a, found := e.reg.Get(d.Agent); found {
+			ag, ok = a, true
+			fmt.Printf("↳ routing to %s (%s)\n", d.Agent, d.Reason)
+		}
+	}
+	if !ok {
+		fmt.Printf("orchestra: agent %q not available\n", e.current)
+		return waitEnter()
+	}
+
+	_, err := engine.Execute(e.ctx, in, engine.Options{
+		Agent:          ag,
+		Prompt:         e.msg,
+		Dir:            e.dir,
+		Stages:         e.stages,
+		MaxRetries:     e.maxRetries,
+		Timeout:        e.timeout,
+		CommitOnAccept: true,
+		Memory:         e.mem,
+		Principles:     e.principles,
+	})
+	if err != nil {
+		fmt.Printf("error: %v\n", err)
+	}
+	_ = waitEnter()
+	return nil
+}
+
+func waitEnter() error {
+	fmt.Print("\n\033[2m(press enter to return to the dashboard)\033[0m ")
+	bufio.NewReader(os.Stdin).ReadString('\n')
+	return nil
+}
+
 // --- helpers ---
 
 func (m Model) taskWidth() int {
@@ -300,7 +478,6 @@ func (m Model) taskWidth() int {
 	return w
 }
 
-// linesShown is a tiny guard to avoid overflowing the view height.
 func (m Model) linesShown(b *strings.Builder) bool {
 	if m.height <= 0 {
 		return false

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -15,7 +16,7 @@ func testModel() Model {
 	reg.Add(agent.New("alpha", "true", nil, "", []agent.Capability{agent.CapImplement}))
 	reg.Add(agent.New("beta", "true", nil, "", []agent.Capability{agent.CapReview}))
 	cfg := &config.Config{DefaultAgent: "alpha"}
-	return New(cfg, reg, nil, ".") // nil memory: history/benchmarks empty
+	return New(Deps{Ctx: context.Background(), Cfg: cfg, Reg: reg, Mem: nil, Dir: ".", DefaultAgent: "alpha"})
 }
 
 func key(s string) tea.KeyMsg {
@@ -71,5 +72,56 @@ func TestWindowResizeApplied(t *testing.T) {
 	m = nm.(Model)
 	if m.width != 120 || m.height != 40 {
 		t.Fatalf("resize not applied: %dx%d", m.width, m.height)
+	}
+}
+
+func TestChatTabTypingAndBackspace(t *testing.T) {
+	m := testModel()
+	m.active = tabChat
+	// type "hi"
+	nm, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hi")})
+	m = nm.(Model)
+	nm, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m = nm.(Model)
+	nm, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	m = nm.(Model)
+	if m.input != "hi x" {
+		t.Fatalf("expected input %q, got %q", "hi x", m.input)
+	}
+	nm, _ = m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	m = nm.(Model)
+	if m.input != "hi " {
+		t.Fatalf("backspace failed, got %q", m.input)
+	}
+	if !strings.Contains(m.View(), "Chat") {
+		t.Fatal("chat view should render")
+	}
+}
+
+func TestChatEscLeavesTab(t *testing.T) {
+	m := testModel()
+	m.active = tabChat
+	nm, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = nm.(Model)
+	if m.active != tabAgents {
+		t.Fatalf("esc should leave chat to Agents, got %d", m.active)
+	}
+}
+
+func TestChatEmptySubmitNoop(t *testing.T) {
+	m := testModel()
+	m.active = tabChat
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // empty input
+	if cmd != nil {
+		t.Fatal("submitting empty input should not launch a command")
+	}
+}
+
+func TestChatTabInNav(t *testing.T) {
+	m := testModel()
+	nm, _ := m.Update(key("4"))
+	m = nm.(Model)
+	if m.active != tabChat {
+		t.Fatalf("key 4 should select Chat, got %d", m.active)
 	}
 }

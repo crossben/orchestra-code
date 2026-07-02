@@ -233,11 +233,12 @@ The nice-to-haves that make the project stand out — build only once the core i
   with reveal animation, TTY-gated spinners during routing/planning/answering, colored diffs and status
   lines. Auto-disables color/animation when piped or `NO_COLOR` is set (regression stays green). The
   full-screen dashboard below is still the later, larger effort.
-- **TUI dashboard (Bubble Tea) 🟡 PARTIAL:** `orchestra dashboard` — a full-screen read-only monitor
-  with tabbed panels (Agents + live health probe, run History, Benchmark results), keyboard nav, styled
-  with the gradient palette. Reads config + SQLite memory; doesn't launch work. **Follow-up:** live
-  in-run monitoring (waves/steps/logs/timeline streaming) needs the engine to emit events instead of
-  printing — a clean next step that would also fix interleaved output during `do --parallel`/`benchmark`.
+- **TUI dashboard (Bubble Tea) 🟡 MOSTLY DONE:** `orchestra dashboard` — full-screen tabbed UI:
+  Agents (+ live health probe), History, Benchmarks, and a **Chat** tab. Chat hands the terminal to the
+  full supervised engine via `tea.Exec` (route → run → validate → accept/reject, like the shell), then
+  returns and refreshes. Keyboard nav, gradient styling. **Follow-up:** live *in-render* streaming of
+  in-run waves/steps/logs (needs the engine to emit events instead of printing) — would also tidy
+  interleaved output during `do --parallel`/`benchmark`.
 - **Benchmark mode ✅ DONE:** `orchestra benchmark "<task>"` runs the task through every available
   agent, each in an isolated git worktree (parallel), then ranks a leaderboard by validation → retries
   → speed → diff size, offers to merge the winner, and records results to SQLite (`benchmarks` table)
