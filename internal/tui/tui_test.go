@@ -17,7 +17,9 @@ func testModel() Model {
 	reg.Add(agent.New("alpha", "true", nil, "", []agent.Capability{agent.CapImplement}))
 	reg.Add(agent.New("beta", "true", nil, "", []agent.Capability{agent.CapReview}))
 	cfg := &config.Config{DefaultAgent: "alpha"}
-	return New(Deps{Ctx: context.Background(), Cfg: cfg, Reg: reg, Mem: nil, Dir: ".", DefaultAgent: "alpha"})
+	m := New(Deps{Ctx: context.Background(), Cfg: cfg, Reg: reg, Mem: nil, Dir: ".", DefaultAgent: "alpha"})
+	nm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30}) // make it ready + size viewport/input
+	return nm.(Model)
 }
 
 func key(s string) tea.KeyMsg {
@@ -79,20 +81,19 @@ func TestWindowResizeApplied(t *testing.T) {
 func TestChatTabTypingAndBackspace(t *testing.T) {
 	m := testModel()
 	m.active = tabChat
-	// type "hi"
 	nm, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hi")})
 	m = nm.(Model)
-	nm, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	nm, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
 	m = nm.(Model)
 	nm, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
 	m = nm.(Model)
-	if m.input != "hi x" {
-		t.Fatalf("expected input %q, got %q", "hi x", m.input)
+	if m.ti.Value() != "hi x" {
+		t.Fatalf("expected input %q, got %q", "hi x", m.ti.Value())
 	}
 	nm, _ = m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
 	m = nm.(Model)
-	if m.input != "hi " {
-		t.Fatalf("backspace failed, got %q", m.input)
+	if m.ti.Value() != "hi " {
+		t.Fatalf("backspace failed, got %q", m.ti.Value())
 	}
 	if !strings.Contains(m.View(), "Chat") {
 		t.Fatal("chat view should render")
@@ -138,15 +139,15 @@ func TestChatTabNavigatesWhileTyping(t *testing.T) {
 	if m.active == tabChat {
 		t.Fatal("tab should navigate out of chat while typing")
 	}
-	if m.input != "hello" {
-		t.Fatalf("input should be preserved on nav, got %q", m.input)
+	if m.ti.Value() != "hello" {
+		t.Fatalf("input should be preserved on nav, got %q", m.ti.Value())
 	}
 }
 
 func TestChatSubmitEntersRunning(t *testing.T) {
 	m := testModel()
 	m.active = tabChat
-	m.input = "do a thing"
+	m.ti.SetValue("do a thing")
 	nm, cmd := m.submitChat()
 	m = nm.(Model)
 	if m.cstate != chatRunning {

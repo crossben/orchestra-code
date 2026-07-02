@@ -92,10 +92,11 @@ orchestra dashboard      # or: orchestra dash
 Tabs: **Agents** (installed + live `p`robe of whether each can actually run), **History** (recent runs),
 **Benchmarks** (past leaderboards), and **Chat**. Keys: `tab` switch • `p` probe • `r` refresh • `q` quit.
 
-In the **Chat** tab you type a message and press `enter`; the agent runs **in the background** (spinner
-while it works — no screen flip), then the diff appears **right in the pane** for you to **accept** (`y`,
-commits) or **reject** (`n`, reverts). Validation + self-correction run first, so you review a result
-that already builds/tests when possible. `tab` navigates away anytime (even mid-typing); `esc` leaves chat.
+In the **Chat** tab you type in a proper input box; the agent runs **in the background** (spinner, no
+screen flip), then the diff appears in a **scrollable pane** for you to **accept** (`y`, commits) or
+**reject** (`n`, reverts). Validation + self-correction run first, so you review a result that already
+builds/tests when possible. The transcript scrolls (`↑/↓`, `pgup/pgdn`); `tab` navigates away anytime
+(even mid-typing); `esc` leaves chat. (Built on Charm's `viewport`/`textinput` for correct redraw.)
 
 ### Benchmark agents
 

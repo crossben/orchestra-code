@@ -1,9 +1,9 @@
 // Package tui is Orchestra's dashboard — a Bubble Tea full-screen view over your
 // agents (with live health probing), run history, benchmark results, and an
 // in-pane Chat tab. Chat runs the agent quietly in the background (spinner while
-// it works), then shows the diff for accept/reject right inside the dashboard —
-// no screen flip. It reuses the engine's quiet Produce path so nothing streams
-// into the render loop.
+// it works), then shows the diff in a scrollable pane for accept/reject right in
+// the dashboard. The transcript and input use bubbles' viewport/textinput so
+// redraw and scrolling are handled correctly.
 package tui
 
 import (
@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -95,6 +97,7 @@ type Model struct {
 	d             Deps
 	active        tab
 	width, height int
+	ready         bool
 
 	runs    []memory.Run
 	benches []memory.BenchRow
@@ -103,19 +106,34 @@ type Model struct {
 	probed  map[string]agent.ProbeResult
 
 	// chat
-	input    string
+	ti       textinput.Model
+	vp       viewport.Model
 	cstate   chatState
 	messages []chatLine
-	pending  engine.Turn // the turn awaiting accept/reject
-	frame    int         // spinner
+	pending  engine.Turn
+	frame    int
 
 	status string
 }
 
-// New builds the dashboard model, loading initial data from memory.
+// New builds the dashboard model.
 func New(d Deps) Model {
-	m := Model{d: d, width: 80, height: 24, probed: map[string]agent.ProbeResult{}}
+	ti := textinput.New()
+	ti.Placeholder = "ask the agent to do something…"
+	ti.Prompt = promptSty.Render("› ")
+	ti.Focus()
+	ti.CharLimit = 0
+
+	m := Model{
+		d:      d,
+		width:  80,
+		height: 24,
+		probed: map[string]agent.ProbeResult{},
+		ti:     ti,
+		vp:     viewport.New(80, 12),
+	}
 	m.reload()
+	m.setChatContent()
 	return m
 }
 
@@ -131,7 +149,7 @@ func (m *Model) reload() {
 	}
 }
 
-func (m Model) Init() tea.Cmd { return nil }
+func (m Model) Init() tea.Cmd { return textinput.Blink }
 
 // --- messages ---
 
@@ -142,6 +160,11 @@ type tickMsg struct{}
 func tickCmd() tea.Cmd {
 	return tea.Tick(90*time.Millisecond, func(time.Time) tea.Msg { return tickMsg{} })
 }
+
+var (
+	errNotRepo = fmt.Errorf("not a git repository — chat needs one for the supervised loop")
+	errDirty   = fmt.Errorf("working tree has uncommitted changes — commit/stash first")
+)
 
 func (m Model) probeCmd() tea.Cmd {
 	agents := m.d.Reg.All()
@@ -170,7 +193,6 @@ func (m Model) probeCmd() tea.Cmd {
 	}
 }
 
-// produceCmd runs one chat turn quietly in the background.
 func (m Model) produceCmd(text string) tea.Cmd {
 	d := m.d
 	return func() tea.Msg {
@@ -185,36 +207,33 @@ func (m Model) produceCmd(text string) tea.Cmd {
 			return turnMsg{engine.Turn{Err: fmt.Errorf("agent %q not available", d.DefaultAgent)}}
 		}
 		t := engine.Produce(d.Ctx, engine.Options{
-			Agent:      ag,
-			Prompt:     text,
-			Dir:        d.Dir,
-			Stages:     d.Stages,
-			MaxRetries: d.MaxRetries,
-			Timeout:    d.Timeout,
-			Principles: d.Principles,
+			Agent: ag, Prompt: text, Dir: d.Dir,
+			Stages: d.Stages, MaxRetries: d.MaxRetries,
+			Timeout: d.Timeout, Principles: d.Principles,
 		})
 		return turnMsg{t}
 	}
 }
 
-var (
-	errNotRepo = fmt.Errorf("not a git repository — chat needs one for the supervised loop")
-	errDirty   = fmt.Errorf("working tree has uncommitted changes — commit/stash first")
-)
-
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.layout()
+		m.ready = true
+		m.setChatContent()
+		return m, nil
 	case probeDoneMsg:
 		m.probed = msg.results
 		m.probing = false
 		m.status = "probe complete"
+		return m, nil
 	case tickMsg:
 		if m.cstate == chatRunning {
 			m.frame++
 			return m, tickCmd()
 		}
+		return m, nil
 	case turnMsg:
 		return m.onTurn(msg.turn)
 	case tea.KeyMsg:
@@ -246,12 +265,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.probeCmd()
 			}
 		}
+		return m, nil
+	}
+	// Non-key messages (e.g. cursor blink) go to the input.
+	if m.active == tabChat {
+		var cmd tea.Cmd
+		m.ti, cmd = m.ti.Update(msg)
+		return m, cmd
 	}
 	return m, nil
 }
 
-// updateChat handles keys in the Chat tab. tab/shift+tab always navigate (so you
-// can leave chat while typing); ctrl+c always quits.
+// updateChat: tab/shift+tab always navigate; ctrl+c quits; otherwise route to
+// the input (idle), the review keys (reviewing), or scroll (running).
 func (m Model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
@@ -264,47 +290,51 @@ func (m Model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if m.cstate == chatReviewing {
+	switch m.cstate {
+	case chatReviewing:
 		switch msg.String() {
 		case "y", "Y":
 			return m.accept()
 		case "n", "N", "esc":
 			return m.reject()
 		}
-		return m, nil
-	}
-	if m.cstate == chatRunning {
-		return m, nil // busy; ignore input
+		var cmd tea.Cmd
+		m.vp, cmd = m.vp.Update(msg) // scroll the diff
+		return m, cmd
+	case chatRunning:
+		var cmd tea.Cmd
+		m.vp, cmd = m.vp.Update(msg)
+		return m, cmd
 	}
 
 	// idle
-	switch msg.Type {
-	case tea.KeyEsc:
+	switch msg.String() {
+	case "esc":
 		m.active = tabAgents
-	case tea.KeyEnter:
+		return m, nil
+	case "enter":
 		return m.submitChat()
-	case tea.KeyBackspace:
-		if r := []rune(m.input); len(r) > 0 {
-			m.input = string(r[:len(r)-1])
-		}
-	case tea.KeySpace:
-		m.input += " "
-	case tea.KeyRunes:
-		m.input += string(msg.Runes)
+	case "pgup", "pgdown", "ctrl+u", "ctrl+d":
+		var cmd tea.Cmd
+		m.vp, cmd = m.vp.Update(msg)
+		return m, cmd
 	}
-	return m, nil
+	var cmd tea.Cmd
+	m.ti, cmd = m.ti.Update(msg)
+	return m, cmd
 }
 
 func (m Model) submitChat() (tea.Model, tea.Cmd) {
-	text := strings.TrimSpace(m.input)
+	text := strings.TrimSpace(m.ti.Value())
 	if text == "" {
 		return m, nil
 	}
-	m.input = ""
+	m.ti.Reset()
 	m.messages = append(m.messages, chatLine{"you", text})
 	m.cstate = chatRunning
 	m.frame = 0
 	m.status = ""
+	m.setChatContent()
 	return m, tea.Batch(tickCmd(), m.produceCmd(text))
 }
 
@@ -324,17 +354,12 @@ func (m Model) onTurn(t engine.Turn) (tea.Model, tea.Cmd) {
 		m.pending = t
 		m.cstate = chatReviewing
 	}
+	m.setChatContent()
 	return m, nil
 }
 
 func (m Model) accept() (tea.Model, tea.Cmd) {
-	last := ""
-	for i := len(m.messages) - 1; i >= 0; i-- {
-		if m.messages[i].role == "you" {
-			last = m.messages[i].text
-			break
-		}
-	}
+	last := lastUserMsg(m.messages)
 	if err := gitutil.Commit(m.d.Dir, "orchestra: "+firstLine(last)); err != nil {
 		m.messages = append(m.messages, chatLine{"sys", "commit failed: " + err.Error()})
 	} else {
@@ -343,6 +368,7 @@ func (m Model) accept() (tea.Model, tea.Cmd) {
 	m.cstate = chatIdle
 	m.pending = engine.Turn{}
 	m.reload()
+	m.setChatContent()
 	return m, nil
 }
 
@@ -354,10 +380,85 @@ func (m Model) reject() (tea.Model, tea.Cmd) {
 	}
 	m.cstate = chatIdle
 	m.pending = engine.Turn{}
+	m.setChatContent()
 	return m, nil
 }
 
+// layout sizes the viewport and input to the window.
+func (m *Model) layout() {
+	w := min(m.width, 100)
+	vpH := m.height - 9
+	if vpH < 3 {
+		vpH = 3
+	}
+	m.vp.Width = w
+	m.vp.Height = vpH
+	m.ti.Width = w - 4
+}
+
+// setChatContent refreshes the viewport with the transcript or the diff.
+func (m *Model) setChatContent() {
+	if m.cstate == chatReviewing {
+		m.vp.SetContent(m.renderDiff())
+		m.vp.GotoTop()
+		return
+	}
+	m.vp.SetContent(m.renderTranscript())
+	m.vp.GotoBottom()
+}
+
+func (m Model) renderTranscript() string {
+	if len(m.messages) == 0 {
+		return dimSty.Render("Ask the agent to do something. It runs in the background; the diff\n" +
+			"appears here for you to accept or reject — all without leaving this screen.")
+	}
+	wrap := lipgloss.NewStyle().Width(max(m.vp.Width-1, 20))
+	var b strings.Builder
+	for i, msg := range m.messages {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		switch msg.role {
+		case "you":
+			b.WriteString(youSty.Render("you") + "\n" + wrap.Render(msg.text) + "\n")
+		case "agent":
+			b.WriteString(headSty.Render("agent") + "\n" + wrap.Render(msg.text) + "\n")
+		case "sys":
+			b.WriteString(dimSty.Render("· "+msg.text) + "\n")
+		}
+	}
+	return b.String()
+}
+
+func (m Model) renderDiff() string {
+	var b strings.Builder
+	switch {
+	case m.pending.Report.Skipped:
+		b.WriteString(dimSty.Render("validation: skipped") + "\n\n")
+	case m.pending.Report.Passed():
+		b.WriteString(okSty.Render("validation: ✓ passed") + "\n\n")
+	default:
+		b.WriteString(badSty.Render("validation: ✗ failed") + "\n\n")
+	}
+	for _, ln := range strings.Split(m.pending.Diff, "\n") {
+		switch {
+		case strings.HasPrefix(ln, "+") && !strings.HasPrefix(ln, "+++"):
+			b.WriteString(addSty.Render(ln) + "\n")
+		case strings.HasPrefix(ln, "-") && !strings.HasPrefix(ln, "---"):
+			b.WriteString(delSty.Render(ln) + "\n")
+		case strings.HasPrefix(ln, "@@"):
+			b.WriteString(titleSty.Render(ln) + "\n")
+		default:
+			b.WriteString(dimSty.Render(ln) + "\n")
+		}
+	}
+	return b.String()
+}
+
 func (m Model) View() string {
+	if !m.ready {
+		return "loading…"
+	}
 	var b strings.Builder
 	b.WriteString(m.header())
 	b.WriteString("\n\n")
@@ -386,7 +487,7 @@ func (m Model) header() string {
 			tabs = append(tabs, tabOff.Render(fmt.Sprintf("%d %s", i+1, name)))
 		}
 	}
-	return title + "   " + strings.Join(tabs, " ") + "\n" + dimSty.Render(strings.Repeat("─", min(m.width, 80)))
+	return title + "   " + strings.Join(tabs, " ") + "\n" + dimSty.Render(strings.Repeat("─", min(m.width, 100)))
 }
 
 func (m Model) footer() string {
@@ -397,11 +498,11 @@ func (m Model) footer() string {
 	case tabChat:
 		switch m.cstate {
 		case chatReviewing:
-			keys = "y: accept & commit • n: reject & revert • tab: switch"
+			keys = "y: accept & commit • n: reject & revert • ↑/↓: scroll • tab: switch"
 		case chatRunning:
-			keys = "working… • tab: switch • ctrl+c: quit"
+			keys = "working… • ↑/↓: scroll • tab: switch • ctrl+c: quit"
 		default:
-			keys = "type & enter: send • tab: switch • esc: leave • ctrl+c: quit"
+			keys = "enter: send • ↑/↓ pgup/pgdn: scroll • tab: switch • esc: leave"
 		}
 	default:
 		keys = "tab: switch • r: refresh • q: quit"
@@ -410,7 +511,21 @@ func (m Model) footer() string {
 	if m.status != "" {
 		status = "   " + m.status
 	}
-	return footerSty.Render(strings.Repeat("─", min(m.width, 80)) + "\n" + keys + status)
+	return footerSty.Render(strings.Repeat("─", min(m.width, 100)) + "\n" + keys + status)
+}
+
+func (m Model) chatView() string {
+	head := headSty.Render("Chat") + dimSty.Render("   (agent: "+m.d.DefaultAgent+")")
+	var bottom string
+	switch m.cstate {
+	case chatRunning:
+		bottom = titleSty.Render(spinnerFrames[m.frame%len(spinnerFrames)]) + dimSty.Render(" agent is working…")
+	case chatReviewing:
+		bottom = promptSty.Render("accept these changes?") + " [y]es / [n]o"
+	default:
+		bottom = m.ti.View()
+	}
+	return head + "\n\n" + m.vp.View() + "\n\n" + bottom
 }
 
 func (m Model) agentsView() string {
@@ -490,84 +605,16 @@ func (m Model) benchView() string {
 	return b.String()
 }
 
-func (m Model) chatView() string {
-	var b strings.Builder
-	b.WriteString(headSty.Render("Chat") + dimSty.Render("   (agent: "+m.d.DefaultAgent+")") + "\n\n")
-
-	// Transcript (last messages that fit).
-	budget := m.height - 12
-	if budget < 3 {
-		budget = 3
-	}
-	msgs := m.messages
-	if len(msgs) > budget {
-		msgs = msgs[len(msgs)-budget:]
-	}
-	if len(msgs) == 0 {
-		b.WriteString(dimSty.Render("Ask the agent to do something — it runs in the background and shows the diff\nhere for you to accept or reject. Nothing leaves this screen.\n"))
-	}
-	for _, msg := range msgs {
-		switch msg.role {
-		case "you":
-			b.WriteString(youSty.Render("you › ") + truncate(firstLine(msg.text), m.width-8) + "\n")
-		case "agent":
-			b.WriteString(headSty.Render("agent ") + "\n" + indentWrap(msg.text, m.width-2, 6) + "\n")
-		case "sys":
-			b.WriteString(dimSty.Render("  · "+msg.text) + "\n")
-		}
-	}
-
-	b.WriteString("\n")
-	switch m.cstate {
-	case chatRunning:
-		b.WriteString(titleSty.Render(spinnerFrames[m.frame%len(spinnerFrames)]) + dimSty.Render(" agent is working…"))
-	case chatReviewing:
-		b.WriteString(m.reviewPane())
-	default:
-		b.WriteString(promptSty.Render("› ") + m.input + dimSty.Render("▏"))
-	}
-	return b.String()
-}
-
-func (m Model) reviewPane() string {
-	var b strings.Builder
-	// validation summary
-	switch {
-	case m.pending.Report.Skipped:
-		b.WriteString(dimSty.Render("validation: skipped") + "\n")
-	case m.pending.Report.Passed():
-		b.WriteString(okSty.Render("validation: ✓ passed") + "\n")
-	default:
-		b.WriteString(badSty.Render("validation: ✗ failed") + "\n")
-	}
-	// diff, truncated to fit
-	maxLines := m.height - 14
-	if maxLines < 4 {
-		maxLines = 4
-	}
-	lines := strings.Split(m.pending.Diff, "\n")
-	shown := lines
-	if len(shown) > maxLines {
-		shown = shown[:maxLines]
-	}
-	for _, ln := range shown {
-		switch {
-		case strings.HasPrefix(ln, "+") && !strings.HasPrefix(ln, "+++"):
-			b.WriteString(addSty.Render(truncate(ln, m.width-1)) + "\n")
-		case strings.HasPrefix(ln, "-") && !strings.HasPrefix(ln, "---"):
-			b.WriteString(delSty.Render(truncate(ln, m.width-1)) + "\n")
-		default:
-			b.WriteString(dimSty.Render(truncate(ln, m.width-1)) + "\n")
-		}
-	}
-	if len(lines) > maxLines {
-		b.WriteString(dimSty.Render(fmt.Sprintf("… %d more diff lines\n", len(lines)-maxLines)))
-	}
-	b.WriteString(promptSty.Render("accept these changes?") + " [y]es / [n]o")
-	return b.String()
-}
-
 // --- helpers ---
+
+func lastUserMsg(msgs []chatLine) string {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].role == "you" {
+			return msgs[i].text
+		}
+	}
+	return ""
+}
 
 func (m Model) taskWidth() int {
 	w := m.width - 52
@@ -602,35 +649,6 @@ func firstLine(s string) string {
 	return s
 }
 
-// indentWrap word-wraps text to width and indents each line by pad spaces,
-// showing at most a few lines so an agent's chatty response doesn't dominate.
-func indentWrap(text string, width, pad int) string {
-	text = strings.TrimSpace(text)
-	if width < 20 {
-		width = 20
-	}
-	prefix := strings.Repeat(" ", pad)
-	var out []string
-	for _, para := range strings.Split(text, "\n") {
-		line := prefix
-		for _, word := range strings.Fields(para) {
-			if len(line)+len(word)+1 > width {
-				out = append(out, line)
-				line = prefix
-			}
-			line += word + " "
-		}
-		out = append(out, strings.TrimRight(line, " "))
-		if len(out) >= 8 {
-			break
-		}
-	}
-	if len(out) >= 8 {
-		out = append(out[:8], prefix+dimSty.Render("…"))
-	}
-	return strings.Join(out, "\n")
-}
-
 func truncate(s string, n int) string {
 	r := []rune(s)
 	if len(r) > n {
@@ -644,6 +662,13 @@ func truncate(s string, n int) string {
 
 func min(a, b int) int {
 	if a < b {
+		return a
+	}
+	return b
+}
+
+func max(a, b int) int {
+	if a > b {
 		return a
 	}
 	return b
