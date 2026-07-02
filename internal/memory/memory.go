@@ -194,5 +194,57 @@ func (s *Store) PreferredAgent(dir string) (string, int, error) {
 	}
 }
 
+// BenchRow is a stored benchmark result read back for display.
+type BenchRow struct {
+	Time     time.Time
+	Task     string
+	Agent    string
+	Valid    bool
+	Won      bool
+	Duration time.Duration
+	Retries  int
+	Files    int
+	Added    int
+	Removed  int
+}
+
+// RecentBenchmarks returns recent benchmark rows for dir (all dirs if "").
+func (s *Store) RecentBenchmarks(dir string, limit int) ([]BenchRow, error) {
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	const cols = `ts, task, agent, valid, won, duration_ms, retries, files, added, removed`
+	if dir == "" {
+		rows, err = s.db.Query(`SELECT `+cols+` FROM benchmarks ORDER BY id DESC LIMIT ?`, limit)
+	} else {
+		rows, err = s.db.Query(`SELECT `+cols+` FROM benchmarks WHERE dir = ? ORDER BY id DESC LIMIT ?`, dir, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []BenchRow
+	for rows.Next() {
+		var (
+			r         BenchRow
+			ts        string
+			valid     int
+			won       int
+			durationMs int64
+		)
+		if err := rows.Scan(&ts, &r.Task, &r.Agent, &valid, &won, &durationMs, &r.Retries, &r.Files, &r.Added, &r.Removed); err != nil {
+			return nil, err
+		}
+		r.Time, _ = time.Parse(time.RFC3339, ts)
+		r.Valid = valid == 1
+		r.Won = won == 1
+		r.Duration = time.Duration(durationMs) * time.Millisecond
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // Close closes the database.
 func (s *Store) Close() error { return s.db.Close() }

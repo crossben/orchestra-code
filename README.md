@@ -81,6 +81,18 @@ orchestra history        # recent runs for this project + the agent you accept m
 orchestra history --all  # across all projects
 ```
 
+### Dashboard (TUI)
+
+A full-screen dashboard over your agents, run history, and benchmark results:
+
+```sh
+orchestra dashboard      # or: orchestra dash
+```
+
+Tabs: **Agents** (installed + live `p`robe of whether each can actually run), **History** (recent runs),
+**Benchmarks** (past leaderboards). Keys: `tab` switch • `p` probe • `r` refresh • `q` quit. It's a
+read-only monitor over config + memory. *(Live in-run monitoring is a planned follow-up.)*
+
 ### Benchmark agents
 
 Run the **same task through every agent** (each isolated in its own worktree, in parallel) and rank them:
@@ -182,6 +194,7 @@ A config file overrides defaults and adds agents; matching names replace the bui
 | `orchestra run`     | one-shot task dispatch                             |
 | `orchestra plan`    | decompose a request into ordered steps (no coding) |
 | `orchestra do`      | plan + execute steps (sequential, or --parallel)   |
+| `orchestra dashboard`| full-screen TUI: agents (live probe), history, benchmarks |
 | `orchestra benchmark`| run one task through every agent, ranked leaderboard |
 | `orchestra history` | recent runs + preferred agent                      |
 | `orchestra agents`  | list agents; `--probe` live-tests each can actually run |
@@ -196,6 +209,7 @@ cmd/orchestra        Cobra CLI: run / plan / do / history / agents / init / shel
 internal/agent       Agent interface + CLIAgent + registry + Querier
 internal/config      YAML config + built-in agent defaults + validator auto-detection
 internal/ui          terminal styling: gradient banner, spinners, colored diffs (TTY-aware)
+internal/tui         Bubble Tea dashboard: agents / history / benchmarks (read-only monitor)
 internal/router      AI routing: Classifier (CLI now, API later) → Decision, 3-tier fallback
 internal/planner     decompose a request into ordered steps (+ depends_on for parallel)
 internal/scheduler   bounded-concurrency runner + DAG waves (cycle/blocked detection)
