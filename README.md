@@ -97,8 +97,9 @@ screen flip), then the **syntax-highlighted diff** appears in a **scrollable pan
 (`y`, commits) or **reject** (`n`, reverts). Validation + self-correction run first. When the AI router is
 enabled, chat **auto-routes** each message to the best agent (or answers plain questions inline) with a
 `↳ routed to …` note; otherwise it uses the default agent. The transcript scrolls (`↑/↓`, `pgup/pgdn`);
-`tab` navigates away anytime (even mid-typing); `esc` leaves chat. (Built on Charm's `viewport`/`textinput`
-for correct redraw, and `chroma` for diff highlighting.)
+`tab` navigates away anytime (even mid-typing); `esc` leaves chat. Agent replies are rendered as
+**markdown**. (Built on Charm's `viewport`/`textinput` for redraw, `glamour` for markdown, and `chroma`
+for diff highlighting.)
 
 ### Benchmark agents
 

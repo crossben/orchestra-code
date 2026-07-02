@@ -187,3 +187,13 @@ func TestOnTurnStates(t *testing.T) {
 		t.Fatal("error turn should go idle with sys msg")
 	}
 }
+
+func TestRenderMarkdown(t *testing.T) {
+	out := renderMarkdown("# Title\n\nSome **bold** text and `code`.\n\n- item one\n- item two", 60)
+	if out == "" {
+		t.Fatal("markdown render returned empty")
+	}
+	if strings.Contains(out, "**bold**") {
+		t.Fatalf("markdown not rendered (raw ** present):\n%s", out)
+	}
+}

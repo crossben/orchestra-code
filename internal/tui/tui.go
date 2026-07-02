@@ -444,7 +444,7 @@ func (m Model) renderTranscript() string {
 		case "you":
 			b.WriteString(youSty.Render("you") + "\n" + wrap.Render(msg.text) + "\n")
 		case "agent":
-			b.WriteString(headSty.Render("agent") + "\n" + wrap.Render(msg.text) + "\n")
+			b.WriteString(headSty.Render("agent") + "\n" + renderMarkdown(msg.text, max(m.vp.Width-1, 20)) + "\n")
 		case "sys":
 			b.WriteString(dimSty.Render("· "+msg.text) + "\n")
 		}
