@@ -246,9 +246,13 @@ The nice-to-haves that make the project stand out — build only once the core i
   agent, each in an isolated git worktree (parallel), then ranks a leaderboard by validation → retries
   → speed → diff size, offers to merge the winner, and records results to SQLite (`benchmarks` table)
   for future data-driven routing. Tokens/cost deferred (agent CLIs don't report usage generically).
-- **Context engine:** git diff + changed files + ranking + token estimation, so you don't send the
-  whole repo every time. Add when context size actually becomes a problem, not before.
-- **Plugin SDK:** let others add agents (deepseek, aider, …) without touching core.
+- **Plugin SDK ✅ DONE (lightweight):** the `Agent` interface is the extension point. Any CLI agent is
+  added via `orchestra.yaml` (name/bin/args/dir_flag/capabilities) with **zero code**; in-process agents
+  implement the interface (+ optional Querier/Prober/QuietRunner/QuietQuerier). Documented in
+  [docs/EXTENDING.md](docs/EXTENDING.md) with a runnable example ([examples/](examples/)). A full runtime
+  binary-plugin loader is intentionally skipped — the config path already covers third-party tools.
+- **Context engine:** *deferred* — the supported agents gather their own repo context, so pre-selecting a
+  file slice is largely redundant. Revisit only if token/cost becomes a measured problem.
 
 ---
 

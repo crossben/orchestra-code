@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/crossben/orchestra/internal/validate"
+	"github.com/crossben/orchestra-code/internal/validate"
 )
 
 // Detect inspects a project directory and returns sensible default validation

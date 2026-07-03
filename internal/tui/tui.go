@@ -18,14 +18,14 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/crossben/orchestra/internal/agent"
-	"github.com/crossben/orchestra/internal/config"
-	"github.com/crossben/orchestra/internal/engine"
-	"github.com/crossben/orchestra/internal/gitutil"
-	"github.com/crossben/orchestra/internal/memory"
-	"github.com/crossben/orchestra/internal/router"
-	"github.com/crossben/orchestra/internal/scheduler"
-	"github.com/crossben/orchestra/internal/validate"
+	"github.com/crossben/orchestra-code/internal/agent"
+	"github.com/crossben/orchestra-code/internal/config"
+	"github.com/crossben/orchestra-code/internal/engine"
+	"github.com/crossben/orchestra-code/internal/gitutil"
+	"github.com/crossben/orchestra-code/internal/memory"
+	"github.com/crossben/orchestra-code/internal/router"
+	"github.com/crossben/orchestra-code/internal/scheduler"
+	"github.com/crossben/orchestra-code/internal/validate"
 )
 
 type tab int

@@ -7,9 +7,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/crossben/orchestra/internal/agent"
-	"github.com/crossben/orchestra/internal/config"
-	"github.com/crossben/orchestra/internal/engine"
+	"github.com/crossben/orchestra-code/internal/agent"
+	"github.com/crossben/orchestra-code/internal/config"
+	"github.com/crossben/orchestra-code/internal/engine"
 )
 
 func testModel() Model {

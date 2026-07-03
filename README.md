@@ -1,16 +1,34 @@
 # Orchestra
 
-**The operating system for AI coding agents.** One interface, many coding agents. See [plan.md](plan.md) for the full roadmap.
+**The operating system for AI coding agents.** One supervised interface, many coding agents.
 
----
+[![CI](https://github.com/crossben/orchestra-code/actions/workflows/ci.yml/badge.svg)](https://github.com/crossben/orchestra-code/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Go](https://img.shields.io/badge/Go-1.22+-00ADD8.svg)](go.mod)
 
-## Where it's at: M5 — parallel execution with worktree isolation
+Orchestra dispatches coding-agent CLIs (Claude Code, OpenCode, Mimo, …) through one **supervised**
+interface. You just chat: it **answers plain questions, routes coding tasks to the best agent**, validates
+every result (build → lint → test), lets the agent fix its own failures, and keeps nothing without your `y`.
+It can **decompose a big request into steps** — running independent ones **in parallel across isolated git
+worktrees** — remembers every run, and can **benchmark agents** against each other.
 
-Orchestra dispatches coding-agent CLIs (Claude, OpenCode, Mimo, …) through one **supervised** interface.
-You just chat: it **reads each message, answers plain questions directly, and routes coding tasks to the
-best agent** itself. It validates every result (build → lint → test), lets the agent fix its own failures,
-and keeps nothing without your `y`. It can **decompose a big request into steps** — running independent
-ones **in parallel across isolated git worktrees** — and remembers every run.
+```sh
+# install directly…
+go install github.com/crossben/orchestra-code/cmd/orchestra@latest
+
+# …or build from source
+git clone https://github.com/crossben/orchestra-code && cd orchestra-code
+go build -o bin/orchestra ./cmd/orchestra
+
+cd /your/project           # any git repo, clean working tree
+orchestra                  # interactive chat shell (AI-routed)
+orchestra dashboard        # full-screen TUI (agents / history / benchmarks / chat)
+orchestra run "add a /health endpoint" --test "go test ./..."
+```
+
+**Requirements:** Go 1.22+, `git`, and at least one agent CLI on your `PATH` (`claude`, `opencode`, `mimo`, …).
+**Add your own agent** in one config block — see [docs/EXTENDING.md](docs/EXTENDING.md).
+Roadmap and design notes in [plan.md](plan.md); contributions welcome — [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Two ways to use it — **same engine underneath**:
 

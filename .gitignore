@@ -1,6 +1,5 @@
 # Build output
-/bin/
-orchestra
+/bin/orchestra
 
 # Go
 *.test

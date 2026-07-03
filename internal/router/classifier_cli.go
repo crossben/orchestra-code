@@ -7,17 +7,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crossben/orchestra/internal/agent"
+	"github.com/crossben/orchestra-code/internal/agent"
 )
 
 // CLIClassifier classifies messages by asking an agent (in query mode) to return
 // a small JSON verdict. It is the default M4 classifier — no API key, works with
 // whatever agent CLIs are installed.
 type CLIClassifier struct {
-	agent      agent.Querier
-	name       string
-	choices    []string // available agent names offered to the classifier
-	timeout    time.Duration
+	agent   agent.Querier
+	name    string
+	choices []string // available agent names offered to the classifier
+	timeout time.Duration
 }
 
 // NewCLIClassifier wraps a query-capable agent. choices is the list of agent

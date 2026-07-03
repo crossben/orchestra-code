@@ -1,4 +1,4 @@
-module github.com/crossben/orchestra
+module github.com/crossben/orchestra-code
 
 go 1.22
 

@@ -68,7 +68,9 @@ func Dim(s string) string     { return render(styDim, s) }
 func Heading(s string) string { return render(styHeading, s) }
 
 // Agent styles an agent name.
-func Agent(name string) string { return render(lipgloss.NewStyle().Foreground(accent2).Bold(true), name) }
+func Agent(name string) string {
+	return render(lipgloss.NewStyle().Foreground(accent2).Bold(true), name)
+}
 
 // Rule returns a horizontal divider of the given width.
 func Rule(width int) string {

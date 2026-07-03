@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crossben/orchestra/internal/runner"
+	"github.com/crossben/orchestra-code/internal/runner"
 )
 
 // Capability describes what kind of work an agent is suited to. The router (M4)

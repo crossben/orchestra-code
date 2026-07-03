@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crossben/orchestra/internal/agent"
-	"github.com/crossben/orchestra/internal/router"
-	"github.com/crossben/orchestra/internal/validate"
+	"github.com/crossben/orchestra-code/internal/agent"
+	"github.com/crossben/orchestra-code/internal/router"
+	"github.com/crossben/orchestra-code/internal/validate"
 	"gopkg.in/yaml.v3"
 )
 

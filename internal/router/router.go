@@ -15,7 +15,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/crossben/orchestra/internal/agent"
+	"github.com/crossben/orchestra-code/internal/agent"
 )
 
 // Intent is what the user's message wants.

@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/crossben/orchestra/internal/ui"
-	"github.com/crossben/orchestra/internal/validate"
+	"github.com/crossben/orchestra-code/internal/ui"
+	"github.com/crossben/orchestra-code/internal/validate"
 )
 
 // Prompt shows the diff and validation outcome, then asks the human to accept

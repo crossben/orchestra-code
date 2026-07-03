@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crossben/orchestra/internal/agent"
+	"github.com/crossben/orchestra-code/internal/agent"
 )
 
 // Step is one planned sub-task.

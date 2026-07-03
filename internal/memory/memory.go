@@ -228,10 +228,10 @@ func (s *Store) RecentBenchmarks(dir string, limit int) ([]BenchRow, error) {
 	var out []BenchRow
 	for rows.Next() {
 		var (
-			r         BenchRow
-			ts        string
-			valid     int
-			won       int
+			r          BenchRow
+			ts         string
+			valid      int
+			won        int
 			durationMs int64
 		)
 		if err := rows.Scan(&ts, &r.Task, &r.Agent, &valid, &won, &durationMs, &r.Retries, &r.Files, &r.Added, &r.Removed); err != nil {

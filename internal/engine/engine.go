@@ -17,12 +17,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crossben/orchestra/internal/agent"
-	"github.com/crossben/orchestra/internal/gitutil"
-	"github.com/crossben/orchestra/internal/memory"
-	"github.com/crossben/orchestra/internal/review"
-	"github.com/crossben/orchestra/internal/ui"
-	"github.com/crossben/orchestra/internal/validate"
+	"github.com/crossben/orchestra-code/internal/agent"
+	"github.com/crossben/orchestra-code/internal/gitutil"
+	"github.com/crossben/orchestra-code/internal/memory"
+	"github.com/crossben/orchestra-code/internal/review"
+	"github.com/crossben/orchestra-code/internal/ui"
+	"github.com/crossben/orchestra-code/internal/validate"
 )
 
 // Options configures a single task execution.

@@ -14,12 +14,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crossben/orchestra/internal/agent"
-	"github.com/crossben/orchestra/internal/engine"
-	"github.com/crossben/orchestra/internal/memory"
-	"github.com/crossben/orchestra/internal/router"
-	"github.com/crossben/orchestra/internal/ui"
-	"github.com/crossben/orchestra/internal/validate"
+	"github.com/crossben/orchestra-code/internal/agent"
+	"github.com/crossben/orchestra-code/internal/engine"
+	"github.com/crossben/orchestra-code/internal/memory"
+	"github.com/crossben/orchestra-code/internal/router"
+	"github.com/crossben/orchestra-code/internal/ui"
+	"github.com/crossben/orchestra-code/internal/validate"
 )
 
 // Shell holds interactive-session state.

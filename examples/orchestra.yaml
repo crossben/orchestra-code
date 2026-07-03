@@ -1,0 +1,51 @@
+# Example Orchestra config showing how to register agents.
+#
+# Copy the relevant bits into an `orchestra.yaml` at your repo root (or run
+# `orchestra init` for the defaults, then edit).
+
+default_agent: claude
+timeout: 10m
+principles: lite            # lean-code preamble: off | lite | full
+
+validate:
+  build: ""                 # e.g. "go build ./..."
+  lint: ""                  # e.g. "go vet ./..."
+  test: ""                  # e.g. "go test ./..."
+  auto: true                # auto-detect checks when the above are empty
+max_retries: 2
+
+router:
+  enabled: true
+  agent: claude             # who classifies / answers
+  routes:                   # static fallback: intent → agent
+    plan: claude
+    implement: opencode
+    review: claude
+
+agents:
+  # A built-in coding agent (headless, auto-approve).
+  - name: claude
+    bin: claude
+    args: ["-p", "--dangerously-skip-permissions"]
+    capabilities: [plan, implement, review]
+
+  # Any other CLI agent — just describe how to invoke it headlessly.
+  - name: aider
+    bin: aider
+    args: ["--yes", "--no-auto-commit", "--message"]
+    capabilities: [implement]
+
+  # opencode-family CLIs ignore the process cwd, so tell them their dir.
+  - name: opencode
+    bin: opencode
+    args: ["run", "--dangerously-skip-permissions"]
+    dir_flag: "--dir"       # Orchestra appends: --dir <working-dir>
+    capabilities: [implement, review]
+
+  # A completely custom "agent" — any script/binary that takes the task as its
+  # last argument and edits files in the working directory. See
+  # examples/agents/notes-agent.sh and docs/EXTENDING.md.
+  - name: notes
+    bin: ./examples/agents/notes-agent.sh
+    args: []
+    capabilities: [implement]
