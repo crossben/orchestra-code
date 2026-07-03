@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 452 130" width="452" height="130" role="img" aria-label="Orchestra">
+  <defs>
+    <linearGradient id="og" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#06b6d4"/>
+      <stop offset="1" stop-color="#7c3aed"/>
+    </linearGradient>
+    <linearGradient id="ow" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#22d3ee"/>
+      <stop offset="1" stop-color="#a855f7"/>
+    </linearGradient>
+  </defs>
+
+  <!-- mark -->
+  <g transform="translate(15,15)">
+    <polygon points="50,12 82.9,31 82.9,69 50,88 17.1,69 17.1,31"
+             fill="none" stroke="url(#og)" stroke-width="4" stroke-linejoin="round"/>
+    <g stroke="url(#og)" stroke-width="2.4" stroke-linecap="round" opacity="0.85">
+      <line x1="50" y1="50" x2="50" y2="27"/>
+      <line x1="50" y1="50" x2="30" y2="62"/>
+      <line x1="50" y1="50" x2="70" y2="62"/>
+    </g>
+    <circle cx="50" cy="27" r="4.4" fill="#22d3ee"/>
+    <circle cx="30" cy="62" r="4.4" fill="#a855f7"/>
+    <circle cx="70" cy="62" r="4.4" fill="#7c3aed"/>
+    <circle cx="50" cy="50" r="7" fill="url(#og)"/>
+  </g>
+
+  <!-- wordmark -->
+  <text x="134" y="82"
+        font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace"
+        font-size="44" font-weight="700" letter-spacing="6" fill="url(#ow)">ORCHESTRA</text>
+</svg>

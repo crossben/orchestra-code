@@ -1,10 +1,14 @@
-# Orchestra
+<p align="center">
+  <img src="assets/logo.svg" alt="Orchestra" width="440">
+</p>
 
-**The operating system for AI coding agents.** One supervised interface, many coding agents.
+<p align="center"><strong>The operating system for AI coding agents.</strong> One supervised interface, many coding agents.</p>
 
-[![CI](https://github.com/crossben/orchestra-code/actions/workflows/ci.yml/badge.svg)](https://github.com/crossben/orchestra-code/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Go](https://img.shields.io/badge/Go-1.22+-00ADD8.svg)](go.mod)
+<p align="center">
+  <a href="https://github.com/crossben/orchestra-code/actions/workflows/ci.yml"><img src="https://github.com/crossben/orchestra-code/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="go.mod"><img src="https://img.shields.io/badge/Go-1.22+-00ADD8.svg" alt="Go 1.22+"></a>
+</p>
 
 Orchestra dispatches coding-agent CLIs (Claude Code, OpenCode, Mimo, …) through one **supervised**
 interface. You just chat: it **answers plain questions, routes coding tasks to the best agent**, validates
