@@ -17,13 +17,21 @@ It can **decompose a big request into steps** — running independent ones **in 
 worktrees** — remembers every run, and can **benchmark agents** against each other.
 
 ```sh
-# install directly…
+# install (Linux/macOS) — prebuilt binary
+curl -fsSL https://raw.githubusercontent.com/crossben/orchestra-code/main/install.sh | sh
+
+# …or with Go (any platform)
 go install github.com/crossben/orchestra-code/cmd/orchestra@latest
 
 # …or build from source
 git clone https://github.com/crossben/orchestra-code && cd orchestra-code
 go build -o bin/orchestra ./cmd/orchestra
+```
 
+> Windows: download the `.zip` from [Releases](https://github.com/crossben/orchestra-code/releases), or use `go install`.
+> If `orchestra` isn't found after install, add the bin dir to your `PATH` (the installer prints the exact line).
+
+```sh
 cd /your/project           # any git repo, clean working tree
 orchestra                  # interactive chat shell (AI-routed)
 orchestra dashboard        # full-screen TUI (agents / history / benchmarks / chat)

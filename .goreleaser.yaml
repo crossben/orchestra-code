@@ -1,0 +1,67 @@
+# GoReleaser config — https://goreleaser.com
+# Cut a release by pushing a tag:  git tag v0.7.0 && git push origin v0.7.0
+version: 2
+
+project_name: orchestra
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: orchestra
+    main: ./cmd/orchestra
+    binary: orchestra
+    env:
+      - CGO_ENABLED=0 # pure-Go (modernc sqlite) → no C toolchain needed
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64 # skip until there's demand; keeps the matrix lean
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: default
+    ids:
+      - orchestra
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - "Merge "
+
+release:
+  github:
+    owner: crossben
+    name: orchestra-code
+  draft: false
+  prerelease: auto
+  name_template: "Orchestra {{ .Tag }}"
