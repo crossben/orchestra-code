@@ -43,7 +43,8 @@ internal/tui     Bubble Tea dashboard (agents/history/benchmarks/chat)
 internal/ui      terminal styling
 ```
 
-See [docs/EXTENDING.md](docs/EXTENDING.md) to add an agent.
+See [docs/EXTENDING.md](docs/EXTENDING.md) to add an agent, and [docs/RELEASING.md](docs/RELEASING.md)
+for how releases are cut.
 
 ## Testing conventions
 
