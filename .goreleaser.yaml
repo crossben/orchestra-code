@@ -67,23 +67,26 @@ release:
   name_template: "Orchestra {{ .Tag }}"
 
 # Homebrew (macOS/Linux):  brew install crossben/tap/orchestra
-# Requires a `crossben/homebrew-tap` repo and a PAT in the TAP_GITHUB_TOKEN
-# secret. Without the token, the formula is generated but not pushed.
-brews:
+# GoReleaser deprecated formula `brews` in favor of casks. Requires a
+# `crossben/homebrew-tap` repo and a PAT in the TAP_GITHUB_TOKEN secret;
+# without the token the cask is generated but not pushed.
+homebrew_casks:
   - name: orchestra
     repository:
       owner: crossben
       name: homebrew-tap
       token: "{{ index .Env \"TAP_GITHUB_TOKEN\" }}"
-    directory: Formula
     homepage: "https://github.com/crossben/orchestra-code"
     description: "The operating system for AI coding agents"
-    license: "MIT"
     skip_upload: '{{ if eq (index .Env "TAP_GITHUB_TOKEN") "" }}true{{ else }}false{{ end }}'
-    install: |
-      bin.install "orchestra"
-    test: |
-      system "#{bin}/orchestra", "--version"
+    # Strip the macOS quarantine flag so the unsigned binary runs without a
+    # Gatekeeper prompt.
+    hooks:
+      post:
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/orchestra"]
+          end
 
 # Scoop (Windows):  scoop bucket add orchestra https://github.com/crossben/scoop-bucket; scoop install orchestra
 # Requires a `crossben/scoop-bucket` repo and the same TAP_GITHUB_TOKEN secret.

@@ -13,7 +13,7 @@ import (
 // version is the build version. It defaults to the last released tag for
 // `go install`, and is overridden at release time via
 // -ldflags "-X main.version=<tag>" (see .goreleaser.yaml).
-var version = "0.7.1"
+var version = "0.7.2"
 
 // persistent flags shared across subcommands.
 var (
