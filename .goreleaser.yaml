@@ -75,7 +75,7 @@ homebrew_casks:
     repository:
       owner: crossben
       name: homebrew-tap
-      token: "{{ index .Env \"TAP_GITHUB_TOKEN\" }}"
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
     homepage: "https://github.com/crossben/orchestra-code"
     description: "The operating system for AI coding agents"
     skip_upload: '{{ if eq (index .Env "TAP_GITHUB_TOKEN") "" }}true{{ else }}false{{ end }}'
@@ -95,7 +95,7 @@ scoops:
     repository:
       owner: crossben
       name: scoop-bucket
-      token: "{{ index .Env \"TAP_GITHUB_TOKEN\" }}"
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
     homepage: "https://github.com/crossben/orchestra-code"
     description: "The operating system for AI coding agents"
     license: MIT

@@ -59,7 +59,7 @@ In **`orchestra-code`** → **Settings → Secrets and variables → Actions →
 - **Name:** `TAP_GITHUB_TOKEN`
 - **Value:** the token from step 1
 
-That's it. The next `v*` tag will publish the formula to `homebrew-tap/Formula/orchestra.rb` and the
+That's it. The next `v*` tag will publish the cask to `homebrew-tap/Casks/orchestra.rb` and the
 manifest to `scoop-bucket/orchestra.json`. Users then install with:
 
 ```sh
