@@ -36,10 +36,11 @@ const (
 	tabAgents
 	tabHistory
 	tabBench
+	tabChanges
 	tabChat
 )
 
-var tabNames = []string{"Logs", "Agents", "History", "Benchmarks", "Chat"}
+var tabNames = []string{"Logs", "Agents", "History", "Benchmarks", "Changes", "Chat"}
 
 type chatState int
 
@@ -98,6 +99,14 @@ type logEntry struct {
 	text string
 }
 
+type changeEntry struct {
+	time  time.Time
+	agent string
+	task  string
+	files []string // extracted from diff
+	diff  string   // full unified diff
+}
+
 // Model is the dashboard state.
 type Model struct {
 	d             Deps
@@ -121,6 +130,11 @@ type Model struct {
 
 	// logs
 	logs []logEntry
+
+	// changes
+	changes        []changeEntry
+	selectedChange int  // index into changes for browsing
+	showingDiff    bool // true = showing diff for selected change
 
 	status string
 }
@@ -279,12 +293,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		prev := m.active
 		switch msg.String() {
-		case "q", "ctrl+c", "esc":
+		case "q", "ctrl+c":
+			return m, tea.Quit
+		case "esc":
+			if m.active == tabChanges && m.showingDiff {
+				m.showingDiff = false
+				return m, nil
+			}
 			return m, tea.Quit
 		case "tab", "right", "l":
-			m.active = (m.active + 1) % 5
+			m.active = (m.active + 1) % 6
 		case "shift+tab", "left", "h":
-			m.active = (m.active + 4) % 5
+			m.active = (m.active + 5) % 6
 		case "1":
 			m.active = tabLogs
 		case "2":
@@ -294,10 +314,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "4":
 			m.active = tabBench
 		case "5":
+			m.active = tabChanges
+		case "6":
 			m.active = tabChat
 		case "r":
 			m.reload()
 			m.status = "refreshed"
+		case "j":
+			if m.active == tabChanges && !m.showingDiff && m.selectedChange < len(m.changes)-1 {
+				m.selectedChange++
+			}
+		case "k":
+			if m.active == tabChanges && !m.showingDiff && m.selectedChange > 0 {
+				m.selectedChange--
+			}
+		case "enter":
+			if m.active == tabChanges && !m.showingDiff && len(m.changes) > 0 {
+				m.showingDiff = true
+			}
 		case "p":
 			if m.active == tabAgents && !m.probing {
 				m.probing = true
@@ -331,12 +365,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "tab":
-		m.active = (m.active + 1) % 5
+		m.ta.Blur()
+		m.active = (m.active + 1) % 6
 		m.layout()
 		m.setChatContent()
 		return m, nil
 	case "shift+tab":
-		m.active = (m.active + 4) % 5
+		m.ta.Blur()
+		m.active = (m.active + 5) % 6
 		m.layout()
 		m.setChatContent()
 		return m, nil
@@ -411,6 +447,7 @@ func (m Model) onTurn(t engine.Turn, note string) (tea.Model, tea.Cmd) {
 		m.cstate = chatIdle
 	default:
 		m.pending = t
+		m.recordChange(t)
 		m.logEvent("turn", "agent produced changes — review required")
 		ui.Notify("Orchestra", "Agent produced changes — review required")
 		m.cstate = chatReviewing
@@ -450,6 +487,46 @@ func (m *Model) logEvent(kind, text string) {
 	if len(m.logs) > 200 {
 		m.logs = m.logs[len(m.logs)-200:]
 	}
+}
+
+func (m *Model) recordChange(t engine.Turn) {
+	task := ""
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		if m.messages[i].role == "you" {
+			task = m.messages[i].text
+			break
+		}
+	}
+	agent := m.d.DefaultAgent
+	m.changes = append(m.changes, changeEntry{
+		time:  time.Now(),
+		agent: agent,
+		task:  task,
+		files: extractFiles(t.Diff),
+		diff:  t.Diff,
+	})
+	if len(m.changes) > 100 {
+		m.changes = m.changes[len(m.changes)-100:]
+	}
+	m.selectedChange = len(m.changes) - 1
+}
+
+func extractFiles(diff string) []string {
+	var files []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(diff, "\n") {
+		if strings.HasPrefix(line, "diff --git ") {
+			parts := strings.Split(line, " b/")
+			if len(parts) == 2 {
+				name := parts[1]
+				if !seen[name] {
+					seen[name] = true
+					files = append(files, name)
+				}
+			}
+		}
+	}
+	return files
 }
 
 // layout sizes the viewport and input to the window.
@@ -539,6 +616,8 @@ func (m Model) View() string {
 		b.WriteString(m.historyView())
 	case tabBench:
 		b.WriteString(m.benchView())
+	case tabChanges:
+		b.WriteString(m.changesView())
 	case tabChat:
 		b.WriteString(m.chatView())
 	case tabLogs:
@@ -575,6 +654,12 @@ func (m Model) footer() string {
 			keys = "working… • ↑/↓: scroll • tab: switch • ctrl+c: quit"
 		default:
 			keys = "ctrl+enter: send • enter: newline • ↑/↓ pgup/pgdn: scroll • tab: switch • esc: leave"
+		}
+	case tabChanges:
+		if m.showingDiff {
+			keys = "esc: back to list • tab: switch • q: quit"
+		} else {
+			keys = "j/k: navigate • enter: view diff • tab: switch • q: quit"
 		}
 	default:
 		keys = "tab: switch • r: refresh • q: quit"
@@ -634,6 +719,81 @@ func (m Model) logsView() string {
 		b.WriteString(fmt.Sprintf("%-20s %-8s %s\n",
 			e.time.Local().Format("01-02 15:04:05"), kind, truncate(e.text, m.width-32)))
 	}
+	return b.String()
+}
+
+func (m Model) changesView() string {
+	if len(m.changes) == 0 {
+		return dimSty.Render("no file changes yet — send a task in Chat to see changes here")
+	}
+	// Diff view
+	if m.showingDiff && m.selectedChange >= 0 && m.selectedChange < len(m.changes) {
+		c := m.changes[m.selectedChange]
+		var b strings.Builder
+		b.WriteString(headSty.Render(fmt.Sprintf("Change %d/%d", m.selectedChange+1, len(m.changes))))
+		b.WriteString(dimSty.Render(fmt.Sprintf("   %s  %s  %s",
+			c.time.Local().Format("01-02 15:04:05"),
+			youSty.Render(c.agent),
+			truncate(c.task, m.width-50))))
+		b.WriteString("\n")
+		if len(c.files) > 0 {
+			b.WriteString(dimSty.Render("files: " + strings.Join(c.files, ", ")))
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+		vpH := m.height - 8
+		if vpH < 3 {
+			vpH = 3
+		}
+		w := m.vp.Width
+		if w < 20 {
+			w = 20
+		}
+		diff := highlightDiff(c.diff)
+		lines := strings.Split(diff, "\n")
+		start := 0
+		if len(lines) > vpH {
+			start = len(lines) - vpH
+		}
+		for _, line := range lines[start:] {
+			b.WriteString(line)
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+		b.WriteString(dimSty.Render("j/k: navigate • esc: back to list"))
+		return b.String()
+	}
+	// List view
+	var b strings.Builder
+	b.WriteString(headSty.Render(fmt.Sprintf("%-20s %-10s %-30s %s", "TIME", "AGENT", "TASK", "FILES")))
+	b.WriteString("\n")
+	start := 0
+	avail := m.height - 5
+	if avail < 1 {
+		avail = 1
+	}
+	if len(m.changes) > avail {
+		start = len(m.changes) - avail
+	}
+	for i := start; i < len(m.changes); i++ {
+		c := m.changes[i]
+		marker := "  "
+		if i == m.selectedChange {
+			marker = okSty.Render("▸ ")
+		}
+		files := strings.Join(c.files, ", ")
+		if len(c.files) > 3 {
+			files = strings.Join(c.files[:3], ", ") + fmt.Sprintf(" +%d", len(c.files)-3)
+		}
+		b.WriteString(fmt.Sprintf("%s%-20s %-10s %-30s %s\n",
+			marker,
+			c.time.Local().Format("01-02 15:04:05"),
+			dimSty.Render(c.agent),
+			truncate(c.task, 30),
+			dimSty.Render(truncate(files, m.width-64))))
+	}
+	b.WriteString("\n")
+	b.WriteString(dimSty.Render("j/k: navigate • enter: view diff • r: refresh"))
 	return b.String()
 }
 

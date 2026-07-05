@@ -126,10 +126,10 @@ func TestChatEmptySubmitNoop(t *testing.T) {
 
 func TestChatTabInNav(t *testing.T) {
 	m := testModel()
-	nm, _ := m.Update(key("5"))
+	nm, _ := m.Update(key("6"))
 	m = nm.(Model)
 	if m.active != tabChat {
-		t.Fatalf("key 5 should select Chat, got %d", m.active)
+		t.Fatalf("key 6 should select Chat, got %d", m.active)
 	}
 }
 
