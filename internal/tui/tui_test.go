@@ -87,13 +87,13 @@ func TestChatTabTypingAndBackspace(t *testing.T) {
 	m = nm.(Model)
 	nm, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
 	m = nm.(Model)
-	if m.ti.Value() != "hi x" {
-		t.Fatalf("expected input %q, got %q", "hi x", m.ti.Value())
+	if m.ta.Value() != "hi x" {
+		t.Fatalf("expected input %q, got %q", "hi x", m.ta.Value())
 	}
 	nm, _ = m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
 	m = nm.(Model)
-	if m.ti.Value() != "hi " {
-		t.Fatalf("backspace failed, got %q", m.ti.Value())
+	if m.ta.Value() != "hi " {
+		t.Fatalf("backspace failed, got %q", m.ta.Value())
 	}
 	if !strings.Contains(m.View(), "Chat") {
 		t.Fatal("chat view should render")
@@ -113,7 +113,11 @@ func TestChatEscLeavesTab(t *testing.T) {
 func TestChatEmptySubmitNoop(t *testing.T) {
 	m := testModel()
 	m.active = tabChat
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // empty input
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // enter in textarea = newline, not submit
+	if cmd != nil {
+		t.Fatal("enter should not launch a command (inserts newline)")
+	}
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlJ}) // ctrl+enter on empty = noop
 	if cmd != nil {
 		t.Fatal("submitting empty input should not launch a command")
 	}
@@ -139,15 +143,15 @@ func TestChatTabNavigatesWhileTyping(t *testing.T) {
 	if m.active == tabChat {
 		t.Fatal("tab should navigate out of chat while typing")
 	}
-	if m.ti.Value() != "hello" {
-		t.Fatalf("input should be preserved on nav, got %q", m.ti.Value())
+	if m.ta.Value() != "hello" {
+		t.Fatalf("input should be preserved on nav, got %q", m.ta.Value())
 	}
 }
 
 func TestChatSubmitEntersRunning(t *testing.T) {
 	m := testModel()
 	m.active = tabChat
-	m.ti.SetValue("do a thing")
+	m.ta.SetValue("do a thing")
 	nm, cmd := m.submitChat()
 	m = nm.(Model)
 	if m.cstate != chatRunning {

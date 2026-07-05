@@ -2,8 +2,8 @@
 // agents (with live health probing), run history, benchmark results, and an
 // in-pane Chat tab. Chat runs the agent quietly in the background (spinner while
 // it works), then shows the diff in a scrollable pane for accept/reject right in
-// the dashboard. The transcript and input use bubbles' viewport/textinput so
-// redraw and scrolling are handled correctly.
+// the dashboard. The transcript uses bubbles' viewport and the input uses
+// bubbles' textarea (multi-line) so redraw and scrolling are handled correctly.
 package tui
 
 import (
@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -106,7 +106,7 @@ type Model struct {
 	probed  map[string]agent.ProbeResult
 
 	// chat
-	ti       textinput.Model
+	ta       textarea.Model
 	vp       viewport.Model
 	cstate   chatState
 	messages []chatLine
@@ -118,18 +118,23 @@ type Model struct {
 
 // New builds the dashboard model.
 func New(d Deps) Model {
-	ti := textinput.New()
-	ti.Placeholder = "ask the agent to do something…"
-	ti.Prompt = promptSty.Render("› ")
-	ti.Focus()
-	ti.CharLimit = 0
+	ta := textarea.New()
+	ta.Placeholder = "ask the agent to do something…"
+	ta.Prompt = promptSty.Render("┃ ")
+	ta.ShowLineNumbers = false
+	ta.CharLimit = 0
+	ta.SetHeight(4)
+	ta.MaxHeight = 8
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	ta.KeyMap.InsertNewline.SetEnabled(false) // enter → newline disabled; ctrl+enter for submit handled in updateChat
+	ta.Focus()
 
 	m := Model{
 		d:      d,
 		width:  80,
 		height: 24,
 		probed: map[string]agent.ProbeResult{},
-		ti:     ti,
+		ta:     ta,
 		vp:     viewport.New(80, 12),
 	}
 	m.reload()
@@ -149,7 +154,7 @@ func (m *Model) reload() {
 	}
 }
 
-func (m Model) Init() tea.Cmd { return textinput.Blink }
+func (m Model) Init() tea.Cmd { return nil }
 
 // --- messages ---
 
@@ -289,7 +294,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Non-key messages (e.g. cursor blink) go to the input.
 	if m.active == tabChat {
 		var cmd tea.Cmd
-		m.ti, cmd = m.ti.Update(msg)
+		m.ta, cmd = m.ta.Update(msg)
 		return m, cmd
 	}
 	return m, nil
@@ -331,24 +336,24 @@ func (m Model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.active = tabAgents
 		return m, nil
-	case "enter":
+	case "ctrl+j": // ctrl+enter
 		return m.submitChat()
-	case "pgup", "pgdown", "ctrl+u", "ctrl+d":
+	case "pgup", "pgdown":
 		var cmd tea.Cmd
 		m.vp, cmd = m.vp.Update(msg)
 		return m, cmd
 	}
 	var cmd tea.Cmd
-	m.ti, cmd = m.ti.Update(msg)
+	m.ta, cmd = m.ta.Update(msg)
 	return m, cmd
 }
 
 func (m Model) submitChat() (tea.Model, tea.Cmd) {
-	text := strings.TrimSpace(m.ti.Value())
+	text := strings.TrimSpace(m.ta.Value())
 	if text == "" {
 		return m, nil
 	}
-	m.ti.Reset()
+	m.ta.Reset()
 	m.messages = append(m.messages, chatLine{"you", text})
 	m.cstate = chatRunning
 	m.frame = 0
@@ -409,13 +414,13 @@ func (m Model) reject() (tea.Model, tea.Cmd) {
 // layout sizes the viewport and input to the window.
 func (m *Model) layout() {
 	w := min(m.width, 100)
-	vpH := m.height - 9
+	vpH := m.height - 11 // header(2) + textarea(4) + footer(2) + padding(3)
 	if vpH < 3 {
 		vpH = 3
 	}
 	m.vp.Width = w
 	m.vp.Height = vpH
-	m.ti.Width = w - 4
+	m.ta.SetWidth(w)
 }
 
 // setChatContent refreshes the viewport with the transcript or the diff.
@@ -513,7 +518,7 @@ func (m Model) footer() string {
 		case chatRunning:
 			keys = "working… • ↑/↓: scroll • tab: switch • ctrl+c: quit"
 		default:
-			keys = "enter: send • ↑/↓ pgup/pgdn: scroll • tab: switch • esc: leave"
+			keys = "ctrl+enter: send • enter: newline • ↑/↓ pgup/pgdn: scroll • tab: switch • esc: leave"
 		}
 	default:
 		keys = "tab: switch • r: refresh • q: quit"
@@ -538,7 +543,7 @@ func (m Model) chatView() string {
 	case chatReviewing:
 		bottom = promptSty.Render("accept these changes?") + " [y]es / [n]o"
 	default:
-		bottom = m.ti.View()
+		bottom = m.ta.View()
 	}
 	return head + "\n\n" + m.vp.View() + "\n\n" + bottom
 }
