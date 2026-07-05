@@ -28,6 +28,7 @@ func key(s string) tea.KeyMsg {
 
 func TestViewRendersAgentsTab(t *testing.T) {
 	m := testModel()
+	m.active = tabAgents
 	view := m.View()
 	for _, want := range []string{"ORCHESTRA", "Agents", "History", "Benchmarks", "AGENT", "alpha", "beta", "quit"} {
 		if !strings.Contains(view, want) {
@@ -38,8 +39,8 @@ func TestViewRendersAgentsTab(t *testing.T) {
 
 func TestTabSwitching(t *testing.T) {
 	m := testModel()
-	// switch to History (key "2")
-	nm, _ := m.Update(key("2"))
+	// switch to History (key "3")
+	nm, _ := m.Update(key("3"))
 	m = nm.(Model)
 	if m.active != tabHistory {
 		t.Fatalf("expected History tab, got %d", m.active)
@@ -125,10 +126,10 @@ func TestChatEmptySubmitNoop(t *testing.T) {
 
 func TestChatTabInNav(t *testing.T) {
 	m := testModel()
-	nm, _ := m.Update(key("4"))
+	nm, _ := m.Update(key("5"))
 	m = nm.(Model)
 	if m.active != tabChat {
-		t.Fatalf("key 4 should select Chat, got %d", m.active)
+		t.Fatalf("key 5 should select Chat, got %d", m.active)
 	}
 }
 

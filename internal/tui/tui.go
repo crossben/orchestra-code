@@ -25,19 +25,21 @@ import (
 	"github.com/crossben/orchestra-code/internal/memory"
 	"github.com/crossben/orchestra-code/internal/router"
 	"github.com/crossben/orchestra-code/internal/scheduler"
+	"github.com/crossben/orchestra-code/internal/ui"
 	"github.com/crossben/orchestra-code/internal/validate"
 )
 
 type tab int
 
 const (
-	tabAgents tab = iota
+	tabLogs tab = iota
+	tabAgents
 	tabHistory
 	tabBench
 	tabChat
 )
 
-var tabNames = []string{"Agents", "History", "Benchmarks", "Chat"}
+var tabNames = []string{"Logs", "Agents", "History", "Benchmarks", "Chat"}
 
 type chatState int
 
@@ -65,8 +67,6 @@ var (
 	footerSty = lipgloss.NewStyle().Foreground(gray)
 	promptSty = lipgloss.NewStyle().Foreground(accent).Bold(true)
 	youSty    = lipgloss.NewStyle().Foreground(accent2).Bold(true)
-	addSty    = lipgloss.NewStyle().Foreground(green)
-	delSty    = lipgloss.NewStyle().Foreground(red)
 )
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
@@ -92,6 +92,12 @@ type chatLine struct {
 	text string
 }
 
+type logEntry struct {
+	time time.Time
+	kind string // "info" | "error" | "turn" | "route" | "probe"
+	text string
+}
+
 // Model is the dashboard state.
 type Model struct {
 	d             Deps
@@ -112,6 +118,9 @@ type Model struct {
 	messages []chatLine
 	pending  engine.Turn
 	frame    int
+
+	// logs
+	logs []logEntry
 
 	status string
 }
@@ -250,6 +259,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case probeDoneMsg:
 		m.probed = msg.results
 		m.probing = false
+		m.logEvent("probe", fmt.Sprintf("probed %d agents", len(msg.results)))
 		m.status = "probe complete"
 		return m, nil
 	case tickMsg:
@@ -267,20 +277,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.active == tabChat {
 			return m.updateChat(msg)
 		}
+		prev := m.active
 		switch msg.String() {
 		case "q", "ctrl+c", "esc":
 			return m, tea.Quit
 		case "tab", "right", "l":
-			m.active = (m.active + 1) % 4
+			m.active = (m.active + 1) % 5
 		case "shift+tab", "left", "h":
-			m.active = (m.active + 3) % 4
+			m.active = (m.active + 4) % 5
 		case "1":
-			m.active = tabAgents
+			m.active = tabLogs
 		case "2":
-			m.active = tabHistory
+			m.active = tabAgents
 		case "3":
-			m.active = tabBench
+			m.active = tabHistory
 		case "4":
+			m.active = tabBench
+		case "5":
 			m.active = tabChat
 		case "r":
 			m.reload()
@@ -291,6 +304,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "probing agents…"
 				return m, m.probeCmd()
 			}
+		}
+		if m.active != prev {
+			if prev == tabChat {
+				m.ta.Blur()
+			}
+			if m.active == tabChat {
+				m.ta.Focus()
+			}
+			m.layout()
+			m.setChatContent()
 		}
 		return m, nil
 	}
@@ -308,10 +331,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "tab":
-		m.active = (m.active + 1) % 4
+		m.active = (m.active + 1) % 5
+		m.layout()
+		m.setChatContent()
 		return m, nil
 	case "shift+tab":
-		m.active = (m.active + 3) % 4
+		m.active = (m.active + 4) % 5
+		m.layout()
+		m.setChatContent()
 		return m, nil
 	}
 
@@ -366,10 +393,12 @@ func (m Model) submitChat() (tea.Model, tea.Cmd) {
 func (m Model) onTurn(t engine.Turn, note string) (tea.Model, tea.Cmd) {
 	if note != "" {
 		m.messages = append(m.messages, chatLine{"sys", note})
+		m.logEvent("route", note)
 	}
 	switch {
 	case t.Err != nil:
 		m.messages = append(m.messages, chatLine{"sys", "error: " + t.Err.Error()})
+		m.logEvent("error", t.Err.Error())
 		m.cstate = chatIdle
 	case !t.HadChanges:
 		resp := strings.TrimSpace(t.AgentText)
@@ -377,9 +406,13 @@ func (m Model) onTurn(t engine.Turn, note string) (tea.Model, tea.Cmd) {
 			resp = "(the agent made no file changes)"
 		}
 		m.messages = append(m.messages, chatLine{"agent", resp})
+		m.logEvent("turn", "agent replied ("+fmt.Sprintf("%d", len(resp))+" chars)")
+		ui.Notify("Orchestra", "Agent finished — "+firstLine(resp))
 		m.cstate = chatIdle
 	default:
 		m.pending = t
+		m.logEvent("turn", "agent produced changes — review required")
+		ui.Notify("Orchestra", "Agent produced changes — review required")
 		m.cstate = chatReviewing
 	}
 	m.setChatContent()
@@ -412,10 +445,20 @@ func (m Model) reject() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) logEvent(kind, text string) {
+	m.logs = append(m.logs, logEntry{time: time.Now(), kind: kind, text: text})
+	if len(m.logs) > 200 {
+		m.logs = m.logs[len(m.logs)-200:]
+	}
+}
+
 // layout sizes the viewport and input to the window.
 func (m *Model) layout() {
 	w := m.width
-	vpH := m.height - 11 // header(2) + textarea(4) + footer(2) + padding(3)
+	vpH := m.height - 5 // header(2) + footer(2) + padding(1)
+	if m.active == tabChat {
+		vpH -= 6 // textarea(4) + gap(2)
+	}
 	if vpH < 3 {
 		vpH = 3
 	}
@@ -448,11 +491,18 @@ func (m Model) renderTranscript() string {
 		}
 		switch msg.role {
 		case "you":
-			b.WriteString(youSty.Render("you") + "\n" + wrap.Render(msg.text) + "\n")
+			b.WriteString(youSty.Render("you"))
+			b.WriteString("\n")
+			b.WriteString(wrap.Render(msg.text))
+			b.WriteString("\n")
 		case "agent":
-			b.WriteString(headSty.Render("agent") + "\n" + renderMarkdown(msg.text, max(m.vp.Width-1, 20)) + "\n")
+			b.WriteString(headSty.Render("agent"))
+			b.WriteString("\n")
+			b.WriteString(renderMarkdown(msg.text, max(m.vp.Width-1, 20)))
+			b.WriteString("\n")
 		case "sys":
-			b.WriteString(dimSty.Render("· "+msg.text) + "\n")
+			b.WriteString(dimSty.Render("· " + msg.text))
+			b.WriteString("\n")
 		}
 	}
 	return b.String()
@@ -462,11 +512,14 @@ func (m Model) renderDiff() string {
 	var b strings.Builder
 	switch {
 	case m.pending.Report.Skipped:
-		b.WriteString(dimSty.Render("validation: skipped") + "\n\n")
+		b.WriteString(dimSty.Render("validation: skipped"))
+		b.WriteString("\n\n")
 	case m.pending.Report.Passed():
-		b.WriteString(okSty.Render("validation: ✓ passed") + "\n\n")
+		b.WriteString(okSty.Render("validation: ✓ passed"))
+		b.WriteString("\n\n")
 	default:
-		b.WriteString(badSty.Render("validation: ✗ failed") + "\n\n")
+		b.WriteString(badSty.Render("validation: ✗ failed"))
+		b.WriteString("\n\n")
 	}
 	b.WriteString(highlightDiff(m.pending.Diff)) // chroma diff highlighting
 	return b.String()
@@ -488,6 +541,8 @@ func (m Model) View() string {
 		b.WriteString(m.benchView())
 	case tabChat:
 		b.WriteString(m.chatView())
+	case tabLogs:
+		b.WriteString(m.logsView())
 	}
 	b.WriteString("\n")
 	b.WriteString(m.footer())
@@ -549,9 +604,43 @@ func (m Model) chatView() string {
 	return head + "\n\n" + m.vp.View() + "\n\n" + bottom
 }
 
+func (m Model) logsView() string {
+	if len(m.logs) == 0 {
+		return dimSty.Render("no events yet — actions in Chat and Agents tabs are logged here")
+	}
+	var b strings.Builder
+	b.WriteString(headSty.Render(fmt.Sprintf("%-20s %-8s %s", "TIME", "KIND", "MESSAGE")))
+	b.WriteString("\n")
+	// Show newest first, fit to screen
+	start := 0
+	avail := m.height - 5 // header + footer + padding
+	if avail < 1 {
+		avail = 1
+	}
+	if len(m.logs) > avail {
+		start = len(m.logs) - avail
+	}
+	for i := start; i < len(m.logs); i++ {
+		e := m.logs[i]
+		kind := dimSty.Render(e.kind)
+		switch e.kind {
+		case "error":
+			kind = badSty.Render(e.kind)
+		case "turn":
+			kind = okSty.Render(e.kind)
+		case "route":
+			kind = youSty.Render(e.kind)
+		}
+		b.WriteString(fmt.Sprintf("%-20s %-8s %s\n",
+			e.time.Local().Format("01-02 15:04:05"), kind, truncate(e.text, m.width-32)))
+	}
+	return b.String()
+}
+
 func (m Model) agentsView() string {
 	var b strings.Builder
-	b.WriteString(headSty.Render(fmt.Sprintf("%-12s %-14s %-22s %s", "AGENT", "INSTALLED", "PROBE", "CAPABILITIES")) + "\n")
+	b.WriteString(headSty.Render(fmt.Sprintf("%-12s %-14s %-22s %s", "AGENT", "INSTALLED", "PROBE", "CAPABILITIES")))
+	b.WriteString("\n")
 	for _, a := range m.d.Reg.All() {
 		installed := okSty.Render("✓")
 		if a.Health() != nil {
@@ -574,7 +663,8 @@ func (m Model) agentsView() string {
 		}
 		b.WriteString(fmt.Sprintf("%-12s %-14s %-22s %s\n", name, installed, probe, dimSty.Render(caps(a))))
 	}
-	b.WriteString("\n" + dimSty.Render("* default agent   ·   press p to live-probe whether each agent can actually run"))
+	b.WriteString("\n")
+	b.WriteString(dimSty.Render("* default agent   ·   press p to live-probe whether each agent can actually run"))
 	return b.String()
 }
 
@@ -583,7 +673,8 @@ func (m Model) historyView() string {
 		return dimSty.Render("no run history yet — try the Chat tab, `orchestra run`, or `orchestra do`")
 	}
 	var b strings.Builder
-	b.WriteString(headSty.Render(fmt.Sprintf("%-17s %-10s %-10s %-4s %s", "WHEN", "AGENT", "OUTCOME", "ATT", "TASK")) + "\n")
+	b.WriteString(headSty.Render(fmt.Sprintf("%-17s %-10s %-10s %-4s %s", "WHEN", "AGENT", "OUTCOME", "ATT", "TASK")))
+	b.WriteString("\n")
 	for _, r := range m.runs {
 		if m.linesShown(&b) {
 			break
@@ -606,7 +697,8 @@ func (m Model) benchView() string {
 		return dimSty.Render("no benchmarks yet — try `orchestra benchmark \"<task>\"`")
 	}
 	var b strings.Builder
-	b.WriteString(headSty.Render(fmt.Sprintf("%-17s %-10s %-6s %-6s %-8s %s", "WHEN", "AGENT", "WON", "VALID", "TIME", "TASK")) + "\n")
+	b.WriteString(headSty.Render(fmt.Sprintf("%-17s %-10s %-6s %-6s %-8s %s", "WHEN", "AGENT", "WON", "VALID", "TIME", "TASK")))
+	b.WriteString("\n")
 	for _, r := range m.benches {
 		if m.linesShown(&b) {
 			break
