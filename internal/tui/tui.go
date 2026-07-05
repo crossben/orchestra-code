@@ -261,6 +261,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case turnMsg:
 		return m.onTurn(msg.turn, msg.note)
 	case tea.KeyMsg:
+		if msg.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
 		if m.active == tabChat {
 			return m.updateChat(msg)
 		}
@@ -300,12 +303,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// updateChat: tab/shift+tab always navigate; ctrl+c quits; otherwise route to
+// updateChat: tab/shift+tab always navigate; otherwise route to
 // the input (idle), the review keys (reviewing), or scroll (running).
 func (m Model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "ctrl+c":
-		return m, tea.Quit
 	case "tab":
 		m.active = (m.active + 1) % 4
 		return m, nil
@@ -413,7 +414,7 @@ func (m Model) reject() (tea.Model, tea.Cmd) {
 
 // layout sizes the viewport and input to the window.
 func (m *Model) layout() {
-	w := min(m.width, 100)
+	w := m.width
 	vpH := m.height - 11 // header(2) + textarea(4) + footer(2) + padding(3)
 	if vpH < 3 {
 		vpH = 3
@@ -503,7 +504,7 @@ func (m Model) header() string {
 			tabs = append(tabs, tabOff.Render(fmt.Sprintf("%d %s", i+1, name)))
 		}
 	}
-	return title + "   " + strings.Join(tabs, " ") + "\n" + dimSty.Render(strings.Repeat("─", min(m.width, 100)))
+	return title + "   " + strings.Join(tabs, " ") + "\n" + dimSty.Render(strings.Repeat("─", m.width))
 }
 
 func (m Model) footer() string {
@@ -527,7 +528,7 @@ func (m Model) footer() string {
 	if m.status != "" {
 		status = "   " + m.status
 	}
-	return footerSty.Render(strings.Repeat("─", min(m.width, 100)) + "\n" + keys + status)
+	return footerSty.Render(strings.Repeat("─", m.width) + "\n" + keys + status)
 }
 
 func (m Model) chatView() string {
@@ -678,13 +679,6 @@ func truncate(s string, n int) string {
 		return string(r[:n-1]) + "…"
 	}
 	return s
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 func max(a, b int) int {
