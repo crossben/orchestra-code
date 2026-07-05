@@ -114,11 +114,7 @@ func TestChatEscLeavesTab(t *testing.T) {
 func TestChatEmptySubmitNoop(t *testing.T) {
 	m := testModel()
 	m.active = tabChat
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // enter in textarea = newline, not submit
-	if cmd != nil {
-		t.Fatal("enter should not launch a command (inserts newline)")
-	}
-	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlJ}) // ctrl+enter on empty = noop
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // empty input = noop
 	if cmd != nil {
 		t.Fatal("submitting empty input should not launch a command")
 	}

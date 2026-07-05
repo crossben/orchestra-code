@@ -400,7 +400,7 @@ func (m Model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.active = tabAgents
 		return m, nil
-	case "ctrl+j": // ctrl+enter
+	case "enter":
 		return m.submitChat()
 	case "pgup", "pgdown":
 		var cmd tea.Cmd
@@ -653,7 +653,7 @@ func (m Model) footer() string {
 		case chatRunning:
 			keys = "working… • ↑/↓: scroll • tab: switch • ctrl+c: quit"
 		default:
-			keys = "ctrl+enter: send • enter: newline • ↑/↓ pgup/pgdn: scroll • tab: switch • esc: leave"
+			keys = "enter: send • ↑/↓ pgup/pgdn: scroll • tab: switch • esc: leave"
 		}
 	case tabChanges:
 		if m.showingDiff {
