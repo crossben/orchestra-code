@@ -342,12 +342,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.active != prev {
 			if prev == tabChat {
 				m.ta.Blur()
+				m.vp.SetContent("") // clear viewport to prevent stale chat leaking
 			}
 			if m.active == tabChat {
 				m.ta.Focus()
 			}
 			m.layout()
-			m.setChatContent()
+			if m.active == tabChat {
+				m.setChatContent()
+			}
 		}
 		return m, nil
 	}
@@ -366,15 +369,15 @@ func (m Model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "tab":
 		m.ta.Blur()
+		m.vp.SetContent("") // clear viewport to prevent stale content leaking
 		m.active = (m.active + 1) % 6
 		m.layout()
-		m.setChatContent()
 		return m, nil
 	case "shift+tab":
 		m.ta.Blur()
+		m.vp.SetContent("") // clear viewport to prevent stale content leaking
 		m.active = (m.active + 5) % 6
 		m.layout()
-		m.setChatContent()
 		return m, nil
 	}
 
@@ -502,31 +505,13 @@ func (m *Model) recordChange(t engine.Turn) {
 		time:  time.Now(),
 		agent: agent,
 		task:  task,
-		files: extractFiles(t.Diff),
+		files: parseDiffFiles(t.Diff),
 		diff:  t.Diff,
 	})
 	if len(m.changes) > 100 {
 		m.changes = m.changes[len(m.changes)-100:]
 	}
 	m.selectedChange = len(m.changes) - 1
-}
-
-func extractFiles(diff string) []string {
-	var files []string
-	seen := map[string]bool{}
-	for _, line := range strings.Split(diff, "\n") {
-		if strings.HasPrefix(line, "diff --git ") {
-			parts := strings.Split(line, " b/")
-			if len(parts) == 2 {
-				name := parts[1]
-				if !seen[name] {
-					seen[name] = true
-					files = append(files, name)
-				}
-			}
-		}
-	}
-	return files
 }
 
 // layout sizes the viewport and input to the window.
@@ -625,7 +610,19 @@ func (m Model) View() string {
 	}
 	b.WriteString("\n")
 	b.WriteString(m.footer())
-	return b.String()
+	return padHeight(b.String(), m.height)
+}
+
+// padHeight pads a string to exactly n lines, preventing stale content from leaking.
+func padHeight(s string, n int) string {
+	lines := strings.Split(s, "\n")
+	if len(lines) >= n {
+		return strings.Join(lines[:n], "\n")
+	}
+	for len(lines) < n {
+		lines = append(lines, "")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) header() string {
