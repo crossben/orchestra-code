@@ -10,12 +10,12 @@ import (
 type ErrorKind int
 
 const (
-	ErrNetwork ErrorKind = iota // transport failure, timeout, DNS
-	ErrAuth                     // 401/403 — bad or missing key
-	ErrBilling                  // 402 / quota exhausted
-	ErrRateLimit                // 429
-	ErrRequest                  // 400/404/422 — malformed request or unknown model
-	ErrServer                   // 5xx — provider-side failure
+	ErrNetwork   ErrorKind = iota // transport failure, timeout, DNS
+	ErrAuth                       // 401/403 — bad or missing key
+	ErrBilling                    // 402 / quota exhausted
+	ErrRateLimit                  // 429
+	ErrRequest                    // 400/404/422 — malformed request or unknown model
+	ErrServer                     // 5xx — provider-side failure
 )
 
 // Error is a typed API failure.
@@ -97,4 +97,3 @@ func truncate(s string, n int) string {
 	}
 	return string(r[:n-1]) + "…"
 }
-

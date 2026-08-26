@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/crossben/orchestra-code/internal/agent"
+	"github.com/crossben/orchestra-code/internal/fsdiff"
 	"github.com/crossben/orchestra-code/internal/gitutil"
 	"github.com/crossben/orchestra-code/internal/memory"
 	"github.com/crossben/orchestra-code/internal/review"
@@ -70,6 +71,11 @@ type Outcome struct {
 
 // Execute runs the full supervised pipeline once (including retries). The reader
 // is shared with the caller so the accept/reject prompt reads the same input.
+//
+// Inside a git repository, diffs and rejects use git exactly as before. In a
+// plain directory (no .git) Orchestra snapshots the tree before dispatching
+// and diffs/restores against that snapshot instead — so the supervised loop
+// works anywhere, like opencode or claude.
 func Execute(ctx context.Context, in *bufio.Reader, opts Options) (out Outcome, err error) {
 	// Record the outcome to memory on a clean (non-error) completion.
 	defer func() {
@@ -78,13 +84,18 @@ func Execute(ctx context.Context, in *bufio.Reader, opts Options) (out Outcome, 
 		}
 	}()
 
+	before, inRepo, err := captureBaseline(opts.Dir)
+	if err != nil {
+		return out, err
+	}
+
 	out, err = runLoop(ctx, opts)
 	if err != nil {
 		return out, err
 	}
 
 	// Review the diff.
-	diff, err := gitutil.Diff(opts.Dir)
+	diff, err := workingTreeDiff(opts.Dir, before)
 	if err != nil {
 		return out, fmt.Errorf("compute diff: %w", err)
 	}
@@ -96,22 +107,56 @@ func Execute(ctx context.Context, in *bufio.Reader, opts Options) (out Outcome, 
 
 	out.Accepted = review.Prompt(in, diff, out.Report)
 	if out.Accepted {
-		if opts.CommitOnAccept {
+		if opts.CommitOnAccept && inRepo {
 			if err := gitutil.Commit(opts.Dir, commitMessage(opts.Prompt)); err != nil {
 				return out, fmt.Errorf("commit accepted changes: %w", err)
 			}
 			fmt.Println(ui.Success("✓ changes accepted and committed"))
-		} else {
-			fmt.Println(ui.Success("✓ changes accepted — left in the working tree"))
+			return out, nil
 		}
+		if opts.CommitOnAccept {
+			opts.logf(ui.Dim("▸ not a git repository — accepted changes stay as plain files"))
+		}
+		fmt.Println(ui.Success("✓ changes accepted — left in the working tree"))
 		return out, nil
 	}
 
-	if err := gitutil.Restore(opts.Dir); err != nil {
+	if err := discardChanges(opts.Dir, before); err != nil {
 		return out, fmt.Errorf("restore after reject: %w", err)
 	}
 	fmt.Println(ui.Warn("↺ changes rejected — working tree restored"))
 	return out, nil
+}
+
+// captureBaseline snapshots dir before a run when it is not a git repository.
+// The bool reports repo membership; inside a repo the snapshot stays nil and
+// git computes its own diffs.
+func captureBaseline(dir string) (*fsdiff.Snapshot, bool, error) {
+	if gitutil.IsRepo(dir) {
+		return nil, true, nil
+	}
+	snap, err := fsdiff.Capture(dir)
+	if err != nil {
+		return nil, false, fmt.Errorf("snapshot %s: %w", dir, err)
+	}
+	return snap, false, nil
+}
+
+// workingTreeDiff returns what changed in dir since the run started: git's own
+// diff inside a repository, a snapshot diff otherwise (before == nil ⇒ git).
+func workingTreeDiff(dir string, before *fsdiff.Snapshot) (string, error) {
+	if before == nil {
+		return gitutil.Diff(dir)
+	}
+	return fsdiff.Diff(dir, before)
+}
+
+// discardChanges reverts dir to its pre-run state.
+func discardChanges(dir string, before *fsdiff.Snapshot) error {
+	if before == nil {
+		return gitutil.Restore(dir)
+	}
+	return fsdiff.Restore(dir, before)
 }
 
 // taskGuardrail (#1) is prepended to every task so headless agents proceed on
@@ -176,14 +221,44 @@ type Turn struct {
 	Diff       string
 	HadChanges bool
 	Err        error
+
+	// Baseline is the pre-turn directory snapshot when the working dir is not
+	// a git repository (nil inside a repo). The TUI passes it back to Revert.
+	Baseline *fsdiff.Snapshot
+}
+
+// CommitAccepted commits dir's working tree with message when it is a git
+// repository and reports whether it did. In a plain directory there is no
+// commit to make — accepted changes simply stay as files — so it is a clean
+// no-op (false, nil).
+func CommitAccepted(dir, message string) (committed bool, err error) {
+	if !gitutil.IsRepo(dir) {
+		return false, nil
+	}
+	return true, gitutil.Commit(dir, message)
+}
+
+// Revert restores dir to its pre-turn state: git restore inside a repository,
+// snapshot restore otherwise. Pass turn.Baseline (may be nil) from the Turn
+// being rejected.
+func Revert(dir string, before *fsdiff.Snapshot) error {
+	return discardChanges(dir, before)
 }
 
 // Produce runs dispatch → validate → self-correct quietly (no streaming, no
 // printing), captures the resulting diff, and returns it WITHOUT committing or
 // reviewing. Used by the dashboard's in-pane chat, which renders the result and
-// handles accept/reject itself.
+// handles accept/reject itself. In non-git directories the pre-turn snapshot is
+// carried on the returned Turn so reject can restore it.
 func Produce(ctx context.Context, opts Options) Turn {
 	var t Turn
+	before, _, err := captureBaseline(opts.Dir)
+	if err != nil {
+		t.Err = err
+		return t
+	}
+	t.Baseline = before
+
 	prompt := opts.Prompt
 	maxAttempts := opts.MaxRetries + 1
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
@@ -205,7 +280,7 @@ func Produce(ctx context.Context, opts Options) Turn {
 		}
 		prompt = retryPrompt(opts.Prompt, t.Report)
 	}
-	diff, err := gitutil.Diff(opts.Dir)
+	diff, err := workingTreeDiff(opts.Dir, before)
 	if err != nil {
 		t.Err = err
 		return t

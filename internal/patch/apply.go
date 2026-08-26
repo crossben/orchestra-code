@@ -21,10 +21,23 @@ import (
 // dir must be inside a git repository for diffs to apply; whole-file writes
 // also work in plain directories.
 func Apply(ctx context.Context, dir string, p Patch) error {
-	// 1. Dry-run every diff first: atomicity across the whole patch.
+	// Normalize diffs: git requires each patch to end with a newline, and
+	// model-extracted fences often drop it.
+	diffs := make([]string, len(p.Diffs))
 	for i := range p.Diffs {
 		raw := p.Diffs[i].Raw
 		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		if !strings.HasSuffix(raw, "\n") {
+			raw += "\n"
+		}
+		diffs[i] = raw
+	}
+
+	// 1. Dry-run every diff first: atomicity across the whole patch.
+	for i, raw := range diffs {
+		if raw == "" {
 			continue
 		}
 		out, err := runGit(ctx, dir, raw, "apply", "--check", "--whitespace=nowarn", "-")
@@ -46,9 +59,8 @@ func Apply(ctx context.Context, dir string, p Patch) error {
 	}
 
 	// 3. Apply the diffs for real.
-	for i := range p.Diffs {
-		raw := p.Diffs[i].Raw
-		if strings.TrimSpace(raw) == "" {
+	for i, raw := range diffs {
+		if raw == "" {
 			continue
 		}
 		out, err := runGit(ctx, dir, raw, "apply", "--whitespace=nowarn", "-")

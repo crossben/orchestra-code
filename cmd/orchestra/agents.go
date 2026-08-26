@@ -45,7 +45,7 @@ func newAgentsCmd() *cobra.Command {
 				if a.Name() == cfg.DefaultAgent {
 					def = " (default)"
 				}
-				fmt.Printf("%-12s %-16s %s%s\n", a.Name(), status, capList(a), def)
+				fmt.Printf("%-12s %-16s %s%s%s\n", a.Name(), status, capList(a), apiTag(a), def)
 			}
 			fmt.Println(ui.Dim("\ntip: `orchestra agents --probe` checks agents can actually run, not just that they're installed"))
 			return nil
@@ -104,4 +104,13 @@ func capList(a agent.Agent) string {
 		caps = append(caps, string(c))
 	}
 	return strings.Join(caps, ",")
+}
+
+// apiTag labels HTTP-backed agents so `orchestra agents` shows what they are
+// at a glance (e.g. " (api: openai/gpt-4o)"). Empty for CLI agents.
+func apiTag(a agent.Agent) string {
+	if api, ok := a.(*agent.APIAgent); ok {
+		return ui.Dim(fmt.Sprintf(" (api: %s/%s)", api.ProviderName(), api.Model()))
+	}
+	return ""
 }

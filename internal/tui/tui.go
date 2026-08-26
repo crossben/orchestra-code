@@ -193,8 +193,7 @@ func tickCmd() tea.Cmd {
 }
 
 var (
-	errNotRepo = fmt.Errorf("not a git repository — chat needs one for the supervised loop")
-	errDirty   = fmt.Errorf("working tree has uncommitted changes — commit/stash first")
+	errDirty = fmt.Errorf("working tree has uncommitted changes — commit/stash first")
 )
 
 func (m Model) probeCmd() tea.Cmd {
@@ -227,11 +226,13 @@ func (m Model) probeCmd() tea.Cmd {
 func (m Model) produceCmd(text string) tea.Cmd {
 	d := m.d
 	return func() tea.Msg {
-		if !gitutil.IsRepo(d.Dir) {
-			return turnMsg{turn: engine.Turn{Err: errNotRepo}}
-		}
-		if clean, _ := gitutil.IsClean(d.Dir); !clean {
-			return turnMsg{turn: engine.Turn{Err: errDirty}}
+		// Inside a git repo the tree must start clean (reject uses git
+		// restore). Plain directories are always allowed: the engine
+		// snapshots them and restores from that snapshot on reject.
+		if gitutil.IsRepo(d.Dir) {
+			if clean, _ := gitutil.IsClean(d.Dir); !clean {
+				return turnMsg{turn: engine.Turn{Err: errDirty}}
+			}
 		}
 
 		agentName := d.DefaultAgent
@@ -461,10 +462,14 @@ func (m Model) onTurn(t engine.Turn, note string) (tea.Model, tea.Cmd) {
 
 func (m Model) accept() (tea.Model, tea.Cmd) {
 	last := lastUserMsg(m.messages)
-	if err := gitutil.Commit(m.d.Dir, "orchestra: "+firstLine(last)); err != nil {
+	committed, err := engine.CommitAccepted(m.d.Dir, "orchestra: "+firstLine(last))
+	switch {
+	case err != nil:
 		m.messages = append(m.messages, chatLine{"sys", "commit failed: " + err.Error()})
-	} else {
+	case committed:
 		m.messages = append(m.messages, chatLine{"sys", "✓ accepted & committed"})
+	default:
+		m.messages = append(m.messages, chatLine{"sys", "✓ accepted — kept as plain files (not a git repo)"})
 	}
 	m.cstate = chatIdle
 	m.pending = engine.Turn{}
@@ -474,7 +479,7 @@ func (m Model) accept() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) reject() (tea.Model, tea.Cmd) {
-	if err := gitutil.Restore(m.d.Dir); err != nil {
+	if err := engine.Revert(m.d.Dir, m.pending.Baseline); err != nil {
 		m.messages = append(m.messages, chatLine{"sys", "restore failed: " + err.Error()})
 	} else {
 		m.messages = append(m.messages, chatLine{"sys", "↺ rejected & reverted"})

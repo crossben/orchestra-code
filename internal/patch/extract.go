@@ -12,6 +12,7 @@ const deleteMarker = "<DELETE>"
 //
 //  1. Fenced blocks containing a unified diff (```diff … ``` or unlabeled):
 //     collected verbatim for `git apply`.
+//
 //  2. Fenced blocks whose FIRST line is a repo-relative file path and whose
 //     remainder is the full new file content:
 //
@@ -21,6 +22,7 @@ const deleteMarker = "<DELETE>"
 //     ```
 //
 //     A body of exactly "<DELETE>" marks a deletion.
+//
 //  3. An unfenced unified diff pasted anywhere in the reply.
 //
 // It returns false when no changes could be extracted (a plain prose answer).

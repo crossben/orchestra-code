@@ -7,6 +7,7 @@ import (
 	"github.com/crossben/orchestra-code/internal/gitutil"
 	"github.com/crossben/orchestra-code/internal/router"
 	"github.com/crossben/orchestra-code/internal/shell"
+	"github.com/crossben/orchestra-code/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -53,15 +54,21 @@ func runShell(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	if !gitutil.IsRepo(flagDir) {
-		return errNotRepo(flagDir)
-	}
-	clean, err := gitutil.IsClean(flagDir)
-	if err != nil {
-		return err
-	}
-	if !clean {
-		return errDirty()
+
+	// Git is optional: inside a repository the supervised loop uses git for
+	// diffs/rejects (and wants a clean start); anywhere else it snapshots the
+	// directory instead, so plain folders work like opencode or claude.
+	inRepo := gitutil.IsRepo(flagDir)
+	if inRepo {
+		clean, err := gitutil.IsClean(flagDir)
+		if err != nil {
+			return err
+		}
+		if !clean {
+			return errDirty()
+		}
+	} else {
+		fmt.Printf("%s\n", ui.Dim(fmt.Sprintf("▸ %s is not a git repository — Orchestra will track changes by snapshot (accept keeps files, reject restores)", flagDir)))
 	}
 
 	mem, err := openMemory()

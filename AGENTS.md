@@ -50,6 +50,9 @@ Binary is at `bin/orchestra` (gitignored).
 - `internal/review/` — diff display + accept/reject prompt.
 - `internal/runner/` — generic process exec (stream/capture/timeout). The engine's engine.
 - `internal/gitutil/` — git helpers (is-repo, is-clean, diff, restore, commit).
+- `internal/fsdiff/` — git-free supervision for plain folders: directory snapshots, a Myers line-diff emitting git-style unified output, and snapshot restore. Used by the engine whenever `--dir` is not a git repository.
+- `internal/llm/` — HTTP LLM providers (`Provider` interface; openai-compatible + anthropic). No new deps: stdlib net/http.
+- `internal/patch/` — extracts unified diffs / whole-file blocks from model output and applies them (git apply --check dry-run first; traversal-guarded writes).
 
 ## Key conventions
 
@@ -69,6 +72,11 @@ Every front door (`run`, `do`, shell) drives the same pipeline in `internal/engi
 dispatch → validate → retry (self-correct) → review (accept/reject)
 ```
 
+Git is optional. Inside a repository, diffs and rejects use git and the tree must start clean
+(reject does `git restore`). Outside one — like opencode or claude — the engine snapshots the
+directory first (`internal/fsdiff`), diffs against that snapshot, and restores from it on reject;
+accept just keeps the files. `--parallel` and `benchmark` still require a repository (worktrees).
+
 If you change validation or retry logic, you change all three entry points. The engine is the product — not the CLI or the TUI.
 
 ## Agent interface contract
@@ -84,11 +92,11 @@ type Agent interface {
 }
 ```
 
-Optional interfaces that CLIAgent also implements: `Querier` (text output for planning), `Prober` (live health check), `QuietRunner` / `QuietQuerier` (no-stream variants for the TUI). Callers type-assert and fall back gracefully.
+Optional interfaces that agents may also implement: `Querier` (text output for planning), `Prober` (live health check), `QuietRunner` / `QuietQuerier` (no-stream variants for the TUI). Callers type-assert and fall back gracefully.
 
 Register new agents in `internal/agent/registry.go` — the `Registry.Add()` method preserves insertion order for stable listings.
 
-The only concrete implementation is `CLIAgent` (spawns a CLI in headless auto-approve mode). A future non-CLI agent (API-backed) can implement the interface without touching the scheduler, router, or shell.
+There are two concrete implementations: `CLIAgent` (spawns a CLI in headless auto-approve mode) and `APIAgent` (`internal/agent/apiagent.go`, calls an HTTP LLM via `internal/llm`, applies its patch via `internal/patch`). API agents are configured with `type: api` in orchestra.yaml — see docs/EXTENDING.md. A future agent kind can implement the interface without touching the scheduler, router, or shell.
 
 ## Testing with fake agents
 
@@ -115,7 +123,7 @@ These are not interchangeable with other TUI frameworks. Tests are headless (`tu
 
 ## Router is CLI-based
 
-The AI router (`internal/router/`) classifies intent by dispatching to a CLI agent (e.g. `claude -p`), not an HTTP API. It inherits agent CLI quirks: needs `--dangerously-skip-permissions`, uses the same `runner` package, and the classification latency is whatever the agent CLI takes. An API-based router is planned but not yet implemented.
+The AI router (`internal/router/`) classifies intent by dispatching to an agent in query mode (e.g. `claude -p`), not by calling an LLM API itself. It inherits agent CLI quirks: needs `--dangerously-skip-permissions`, uses the same `runner` package, and the classification latency is whatever the agent takes. Since `APIAgent` also implements `Querier`, an api-type agent can serve as the router's classifier today; a dedicated direct-API classifier inside `internal/router` remains planned but unimplemented.
 
 ## Gitignored directories
 

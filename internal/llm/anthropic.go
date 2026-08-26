@@ -20,11 +20,11 @@ const anthropicVersion = "2023-06-01"
 
 // anthropicRequest / anthropicResponse model the minimal messages wire shape.
 type anthropicRequest struct {
-	Model       string            `json:"model"`
-	System      string            `json:"system,omitempty"`
-	Messages    []anthropicTurn   `json:"messages"`
-	MaxTokens   int               `json:"max_tokens"`
-	Temperature float64           `json:"temperature"`
+	Model       string          `json:"model"`
+	System      string          `json:"system,omitempty"`
+	Messages    []anthropicTurn `json:"messages"`
+	MaxTokens   int             `json:"max_tokens"`
+	Temperature float64         `json:"temperature"`
 }
 
 type anthropicTurn struct {

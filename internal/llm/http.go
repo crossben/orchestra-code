@@ -83,4 +83,3 @@ func transportText(err error) string {
 		return truncate(err.Error(), bodyDetailLimit)
 	}
 }
-

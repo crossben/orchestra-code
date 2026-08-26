@@ -230,4 +230,3 @@ func TestEmptyChoicesIsServerError(t *testing.T) {
 		t.Fatalf("unhelpful message %q; want it to contain %q", le.Error(), want)
 	}
 }
-

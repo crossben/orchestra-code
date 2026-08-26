@@ -60,16 +60,17 @@ func newRunCmd() *cobra.Command {
 				cfg.Principles = principles
 			}
 
-			// Git pre-flight: the supervised loop reverts on reject.
-			if !gitutil.IsRepo(flagDir) {
-				return errNotRepo(flagDir)
-			}
-			clean, err := gitutil.IsClean(flagDir)
-			if err != nil {
-				return err
-			}
-			if !clean && !force {
-				return errDirty()
+			// Git pre-flight: inside a repository the supervised loop reverts
+			// on reject, so it wants a clean start (unless --force). Plain
+			// directories are fine — changes are snapshot-tracked instead.
+			if gitutil.IsRepo(flagDir) {
+				clean, err := gitutil.IsClean(flagDir)
+				if err != nil {
+					return err
+				}
+				if !clean && !force {
+					return errDirty()
+				}
 			}
 
 			reg := cfg.BuildRegistry()

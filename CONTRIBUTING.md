@@ -31,7 +31,7 @@ gofmt -w .          # format (CI enforces this)
 
 ```
 cmd/orchestra    CLI (cobra): run / do / plan / benchmark / dashboard / agents / init / shell
-internal/agent   Agent interface + CLIAgent + registry            ← the extension point
+internal/agent   Agent interface + CLIAgent/APIAgent + registry      ← the extension point
 internal/engine  supervised pipeline: dispatch → validate → retry → review
 internal/router  AI routing (classify → decide)
 internal/planner request → ordered steps (+ dependencies)
