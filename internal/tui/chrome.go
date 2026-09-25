@@ -140,6 +140,15 @@ func padLines(s string, n, w int) string {
 	return strings.Join(lines, "\n")
 }
 
+// tooSmall fills tiny windows with a resize hint, never exceeding them.
+func (m Model) tooSmall() string {
+	w, h := max(m.width, 1), max(m.height, 1)
+	msg := titleSty.Render("⬡ ORCHESTRA") + "\n" +
+		dimSty.Render(fmt.Sprintf("window is %d×%d — make it at least %d×%d", m.width, m.height, minWidth, minHeight)) + "\n" +
+		dimSty.Render("ctrl+c quits")
+	return padLines(lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, msg), h, w)
+}
+
 // emptyState is a centred hint box for tabs with nothing to show yet.
 func emptyState(title, hint string, w, h int) string {
 	b := box("", headSty.Render(title)+"\n"+dimSty.Render(hint), min(max(lipgloss.Width(hint)+6, 40), w), faint)

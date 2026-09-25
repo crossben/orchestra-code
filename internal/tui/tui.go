@@ -493,9 +493,17 @@ func (m *Model) logEvent(kind, text string) {
 // bodyHeight is the space between the header (2 lines) and status bar (1).
 func (m Model) bodyHeight() int { return max(m.height-3, 5) }
 
+// Smallest window the full layout fits in.
+const minWidth, minHeight = 60, 12
+
 func (m Model) View() string {
 	if !m.ready {
 		return "loading…"
+	}
+	// A frame taller than the window makes the terminal scroll on every
+	// redraw, stacking copies of the screen; below the minimum, say so instead.
+	if m.width < minWidth || m.height < minHeight {
+		return m.tooSmall()
 	}
 	var body string
 	switch {

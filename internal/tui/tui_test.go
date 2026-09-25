@@ -617,3 +617,25 @@ func TestLongAnswerScrollsWithMouseWheel(t *testing.T) {
 		t.Fatalf("wheel should move the History selection, sel=%d", h.histSel)
 	}
 }
+
+// In any window, however small, a frame must fit exactly: taller frames make
+// the terminal scroll on every redraw and stack copies of the screen.
+func TestTinyWindowNeverOverflows(t *testing.T) {
+	for _, size := range [][2]int{{80, 2}, {80, 5}, {40, 20}, {59, 11}, {20, 3}, {1, 1}} {
+		m := testModelIn(".", nil, nil, size[0], size[1])
+		for tb := tab(0); tb < numTabs; tb++ {
+			lines := strings.Split(m.switchTab(tb).View(), "\n")
+			if len(lines) > size[1] {
+				t.Fatalf("%dx%d tab %s: %d lines", size[0], size[1], tabNames[tb], len(lines))
+			}
+			for _, l := range lines {
+				if lipgloss.Width(l) > size[0] {
+					t.Fatalf("%dx%d tab %s: line wider than window: %q", size[0], size[1], tabNames[tb], l)
+				}
+			}
+		}
+	}
+	if v := testModelIn(".", nil, nil, 80, 8).View(); !strings.Contains(v, "at least") {
+		t.Fatalf("small window should explain the minimum size:\n%s", v)
+	}
+}
