@@ -98,3 +98,13 @@ func run(dir string, args ...string) (string, error) {
 	}
 	return stdout.String(), nil
 }
+
+// Branch returns the current branch name, or "" when detached or not a repo.
+// symbolic-ref (unlike rev-parse) also works before the first commit.
+func Branch(dir string) string {
+	out, err := run(dir, "symbolic-ref", "--short", "-q", "HEAD")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}

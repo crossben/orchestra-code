@@ -7,9 +7,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crossben/orchestra-code/internal/agent"
+	"github.com/crossben/orchestra-code/internal/validate"
 )
 
 // writeAgent is an in-process fake agent that "edits" the task directory by
@@ -169,5 +171,78 @@ func TestExecuteGitRepoAcceptStillCommits(t *testing.T) {
 	status, _ := exec.Command("git", "-C", dir, "status", "--porcelain").CombinedOutput()
 	if strings.TrimSpace(string(status)) != "" {
 		t.Errorf("tree should be clean after commit: %q", status)
+	}
+}
+
+// syncBuffer is a goroutine-safe bytes.Buffer for capturing streamed output.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// Produce must report each attempt, the agent's exit and every validation
+// stage, and stream the agent's output — the dashboard's live run panel.
+func TestProduceEmitsEventsAndStreamsOutput(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(t.TempDir(), "flaky.sh")
+	// First attempt writes "broken", later ones "fixed"; the counter lives
+	// next to the script so it never shows up in the diff.
+	mustWrite(t, script, `#!/bin/sh
+c="$(dirname "$0")/count"; n=$(cat "$c" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$c"
+if [ $n -ge 2 ]; then echo fixed > out.txt; else echo broken > out.txt; fi
+echo "attempt $n"
+`)
+	if err := os.Chmod(script, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var events []Event
+	var out syncBuffer
+	turn := Produce(context.Background(), Options{
+		Agent:      agent.New("flaky", script, nil, "", []agent.Capability{agent.CapImplement}),
+		Prompt:     "fix it",
+		Dir:        dir,
+		Stages:     []validate.Stage{{Name: "test", Command: "grep -q fixed out.txt"}},
+		MaxRetries: 2,
+		OnEvent:    func(e Event) { events = append(events, e) },
+		Output:     &out,
+	})
+	if turn.Err != nil {
+		t.Fatal(turn.Err)
+	}
+	if turn.Attempts != 2 || !turn.Report.Passed() || !turn.HadChanges {
+		t.Fatalf("unexpected turn: attempts=%d passed=%v changed=%v", turn.Attempts, turn.Report.Passed(), turn.HadChanges)
+	}
+
+	var kinds []string
+	names := map[EventKind]string{EventAttempt: "attempt", EventAgentDone: "agent", EventStageStart: "start", EventStageDone: "done"}
+	for _, e := range events {
+		k := names[e.Kind]
+		if e.Kind == EventStageDone && !e.Passed {
+			k += "✗"
+		}
+		kinds = append(kinds, k)
+	}
+	want := "attempt agent start done✗ attempt agent start done"
+	if got := strings.Join(kinds, " "); got != want {
+		t.Fatalf("events = %q, want %q", got, want)
+	}
+	if events[4].Attempt != 2 || events[4].Max != 3 {
+		t.Fatalf("second attempt event = %+v", events[4])
+	}
+	if s := out.String(); !strings.Contains(s, "attempt 1") || !strings.Contains(s, "attempt 2") {
+		t.Fatalf("output not streamed: %q", s)
 	}
 }

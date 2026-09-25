@@ -20,6 +20,10 @@ type Spec struct {
 	Dir     string        // working directory
 	Timeout time.Duration // hard cap on runtime (0 = none)
 	Env     []string      // extra environment (appended to os.Environ)
+
+	// Output, if set, additionally receives the combined stdout+stderr as it is
+	// produced. Only RunProbe honours it (the quiet path the dashboard streams).
+	Output io.Writer
 }
 
 // Result reports how the process finished.
@@ -164,8 +168,13 @@ func RunProbe(ctx context.Context, spec Spec) (string, Result, error) {
 	var buf bytes.Buffer
 	cmd := exec.CommandContext(ctx, spec.Bin, spec.Args...)
 	cmd.Dir = spec.Dir
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
+	// One writer value for both streams: exec then serialises the writes.
+	var w io.Writer = &buf
+	if spec.Output != nil {
+		w = io.MultiWriter(&buf, spec.Output)
+	}
+	cmd.Stdout = w
+	cmd.Stderr = w
 	cmd.Env = append(os.Environ(), spec.Env...)
 
 	start := time.Now()

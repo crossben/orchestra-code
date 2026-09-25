@@ -70,6 +70,18 @@ func (r Report) FeedbackText() string {
 
 // RunPipeline runs stages in order in dir, stopping at the first failure.
 func RunPipeline(ctx context.Context, dir string, stages []Stage) Report {
+	return RunPipelineObserved(ctx, dir, stages, nil)
+}
+
+// Observer is told when each stage starts (done=false, res.Name only) and
+// finishes (done=true, full result). Used to show validation progress live.
+type Observer func(done bool, res StageResult)
+
+// RunPipelineObserved is RunPipeline with progress callbacks; obs may be nil.
+func RunPipelineObserved(ctx context.Context, dir string, stages []Stage, obs Observer) Report {
+	if obs == nil {
+		obs = func(bool, StageResult) {}
+	}
 	if len(stages) == 0 {
 		return Report{Skipped: true}
 	}
@@ -78,10 +90,12 @@ func RunPipeline(ctx context.Context, dir string, stages []Stage) Report {
 		if strings.TrimSpace(st.Command) == "" {
 			continue
 		}
+		obs(false, StageResult{Name: st.Name})
 		cmd := exec.CommandContext(ctx, "sh", "-c", st.Command)
 		cmd.Dir = dir
 		out, err := cmd.CombinedOutput()
 		res := StageResult{Name: st.Name, Passed: err == nil, Output: string(out)}
+		obs(true, res)
 		rep.Stages = append(rep.Stages, res)
 		if !res.Passed {
 			break // stop-on-first-failure

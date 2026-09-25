@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -113,6 +114,8 @@ func (a *APIAgent) Run(ctx context.Context, task Task) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("build repo snapshot: %w", err)
 	}
+	// There is no token stream, so progress is one line out and one line back.
+	progress(task.Output, "→ asking %s (%s) · %d KiB of repo context", a.model, a.prov.Name(), len(snap)>>10)
 	text, err := a.complete(ctx, outputContract, snap+"\n\n=== TASK ===\n"+task.Prompt, task.Timeout)
 	if err != nil {
 		return Result{}, err
@@ -122,10 +125,20 @@ func (a *APIAgent) Run(ctx context.Context, task Task) (Result, error) {
 		if err := patch.Apply(ctx, task.Dir, p); err != nil {
 			return Result{Duration: time.Since(start)}, fmt.Errorf("apply model changes: %w", err)
 		}
+		progress(task.Output, "← applied %d diff(s) and %d file write(s) in %s", len(p.Diffs), len(p.Files), time.Since(start).Round(time.Second/10))
+	} else {
+		progress(task.Output, "← reply with no changes in %s", time.Since(start).Round(time.Second/10))
 	}
 	// Output carries the model's raw text so the engine's no-change/question
 	// detection (package engine) sees exactly what the model said.
 	return Result{ExitCode: 0, Duration: time.Since(start), Output: text}, nil
+}
+
+// progress writes one line to w when it is set.
+func progress(w io.Writer, format string, a ...any) {
+	if w != nil {
+		fmt.Fprintf(w, format+"\n", a...)
+	}
 }
 
 // RunQuiet implements QuietRunner. API calls never stream, so this is Run.
