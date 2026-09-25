@@ -32,7 +32,8 @@ type Run struct {
 	Prompt   string
 	Outcome  string // "accepted" | "rejected" | "no-change" | "failed"
 	Attempts int
-	Passed   bool // validation passed
+	Passed   bool   // validation passed
+	Diff     string // unified diff the run produced ("" when none or not recorded)
 }
 
 // DefaultPath returns ~/.orchestra/orchestra.db.
@@ -93,7 +94,36 @@ CREATE TABLE IF NOT EXISTS benchmarks (
     won        INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_bench_dir ON benchmarks(dir);`)
+	if err != nil {
+		return err
+	}
+	// Added after the first release: databases created earlier lack the diff
+	// column. SQLite has no ADD COLUMN IF NOT EXISTS, so check first.
+	has, err := s.hasColumn("runs", "diff")
+	if err != nil || has {
+		return err
+	}
+	_, err = s.db.Exec(`ALTER TABLE runs ADD COLUMN diff TEXT NOT NULL DEFAULT ''`)
 	return err
+}
+
+// hasColumn reports whether table has a column named col.
+func (s *Store) hasColumn(table, col string) (bool, error) {
+	rows, err := s.db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return false, err
+		}
+		if name == col {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // BenchRun is one agent's result in a benchmark.
@@ -138,8 +168,8 @@ func (s *Store) Record(r Run, now time.Time) error {
 		passed = 1
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO runs (ts, dir, agent, prompt, outcome, attempts, passed) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		now.UTC().Format(time.RFC3339), r.Dir, r.Agent, r.Prompt, r.Outcome, r.Attempts, passed,
+		`INSERT INTO runs (ts, dir, agent, prompt, outcome, attempts, passed, diff) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		now.UTC().Format(time.RFC3339), r.Dir, r.Agent, r.Prompt, r.Outcome, r.Attempts, passed, r.Diff,
 	)
 	return err
 }
@@ -151,9 +181,9 @@ func (s *Store) Recent(dir string, limit int) ([]Run, error) {
 		err  error
 	)
 	if dir == "" {
-		rows, err = s.db.Query(`SELECT id, ts, dir, agent, prompt, outcome, attempts, passed FROM runs ORDER BY id DESC LIMIT ?`, limit)
+		rows, err = s.db.Query(`SELECT id, ts, dir, agent, prompt, outcome, attempts, passed, diff FROM runs ORDER BY id DESC LIMIT ?`, limit)
 	} else {
-		rows, err = s.db.Query(`SELECT id, ts, dir, agent, prompt, outcome, attempts, passed FROM runs WHERE dir = ? ORDER BY id DESC LIMIT ?`, dir, limit)
+		rows, err = s.db.Query(`SELECT id, ts, dir, agent, prompt, outcome, attempts, passed, diff FROM runs WHERE dir = ? ORDER BY id DESC LIMIT ?`, dir, limit)
 	}
 	if err != nil {
 		return nil, err
@@ -165,7 +195,7 @@ func (s *Store) Recent(dir string, limit int) ([]Run, error) {
 		var r Run
 		var ts string
 		var passed int
-		if err := rows.Scan(&r.ID, &ts, &r.Dir, &r.Agent, &r.Prompt, &r.Outcome, &r.Attempts, &passed); err != nil {
+		if err := rows.Scan(&r.ID, &ts, &r.Dir, &r.Agent, &r.Prompt, &r.Outcome, &r.Attempts, &passed, &r.Diff); err != nil {
 			return nil, err
 		}
 		r.Time, _ = time.Parse(time.RFC3339, ts)
@@ -192,6 +222,46 @@ func (s *Store) PreferredAgent(dir string) (string, int, error) {
 	default:
 		return "", 0, fmt.Errorf("preferred agent: %w", err)
 	}
+}
+
+// AgentStats summarises one agent's history for a directory.
+type AgentStats struct {
+	Runs     int
+	Accepted int
+	LastUsed time.Time
+}
+
+// StatsByAgent returns per-agent run counts, accepted counts and last-used time
+// for dir (all dirs if "").
+func (s *Store) StatsByAgent(dir string) (map[string]AgentStats, error) {
+	const q = `SELECT agent, COUNT(*), SUM(outcome = 'accepted'), MAX(ts) FROM runs`
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if dir == "" {
+		rows, err = s.db.Query(q + ` GROUP BY agent`)
+	} else {
+		rows, err = s.db.Query(q+` WHERE dir = ? GROUP BY agent`, dir)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]AgentStats{}
+	for rows.Next() {
+		var (
+			name string
+			st   AgentStats
+			ts   string
+		)
+		if err := rows.Scan(&name, &st.Runs, &st.Accepted, &ts); err != nil {
+			return nil, err
+		}
+		st.LastUsed, _ = time.Parse(time.RFC3339, ts)
+		out[name] = st
+	}
+	return out, rows.Err()
 }
 
 // BenchRow is a stored benchmark result read back for display.

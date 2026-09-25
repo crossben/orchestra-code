@@ -67,6 +67,7 @@ type Outcome struct {
 	Report     validate.Report
 	HadChanges bool
 	Accepted   bool
+	Diff       string // the reviewed diff ("" when nothing changed)
 }
 
 // Execute runs the full supervised pipeline once (including retries). The reader
@@ -104,6 +105,7 @@ func Execute(ctx context.Context, in *bufio.Reader, opts Options) (out Outcome, 
 		return out, nil
 	}
 	out.HadChanges = true
+	out.Diff = diff
 
 	out.Accepted = review.Prompt(in, diff, out.Report)
 	if out.Accepted {
@@ -366,6 +368,7 @@ func ExecuteHeadless(ctx context.Context, opts Options) (out Outcome, err error)
 		return out, nil
 	}
 	out.HadChanges = true
+	out.Diff = diff
 	if err := gitutil.Commit(opts.Dir, commitMessage(opts.Prompt)); err != nil {
 		return out, fmt.Errorf("commit changes: %w", err)
 	}
@@ -389,6 +392,7 @@ func recordMemory(opts Options, out Outcome, outcome string) {
 		Outcome:  outcome,
 		Attempts: out.Attempts,
 		Passed:   out.Report.Passed(),
+		Diff:     out.Diff,
 	}, time.Now()); rerr != nil {
 		opts.logf("(warning: could not record to memory: %v)", rerr)
 	}
