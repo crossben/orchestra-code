@@ -6,6 +6,7 @@ package runner
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -194,6 +195,11 @@ func RunProbe(ctx context.Context, spec Spec) (string, Result, error) {
 	}
 	if exitErr, ok := err.(*exec.ExitError); ok {
 		return out, Result{ExitCode: exitErr.ExitCode(), Duration: dur}, nil
+	}
+	// The agent exited 0 but something it spawned kept the output pipe open
+	// past WaitDelay: the run itself succeeded.
+	if errors.Is(err, exec.ErrWaitDelay) {
+		return out, Result{ExitCode: 0, Duration: dur}, nil
 	}
 	if err != nil {
 		return out, Result{ExitCode: -1, Duration: dur}, err

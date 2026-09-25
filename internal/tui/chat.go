@@ -184,6 +184,9 @@ func (m Model) onTurn(msg turnMsg) (tea.Model, tea.Cmd) {
 	}
 	m.layout()
 	m.setChatContent()
+	if m.quitting {
+		return m, tea.Quit
+	}
 	return m, nil
 }
 
@@ -310,7 +313,9 @@ func (m Model) welcome() string {
 		dimSty.Render("the checks run, and nothing is kept until you accept the diff."),
 		"",
 		keySty.Render("try  ") + "add a /health endpoint with a test",
-		keySty.Render("     ") + "why is the build slow?" + dimSty.Render("  (questions get answers)"),
+	}
+	if m.d.RoutingOn && m.d.Router != nil {
+		lines = append(lines, keySty.Render("     ")+"why is the build slow?"+dimSty.Render("  (questions get answers)"))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -329,14 +334,9 @@ func (m Model) sessionCard(w, h int) string {
 	if m.d.RoutingOn && m.d.Router != nil {
 		routing = okSty.Render("AI") + " picks the agent"
 	}
-	ready, total := 0, 0
+	total := 0
 	if m.d.Reg != nil {
-		for _, a := range m.d.Reg.All() {
-			total++
-			if a.Health() == nil {
-				ready++
-			}
-		}
+		total = len(m.d.Reg.All())
 	}
 	checks := warnSty.Render("none — changes are unverified")
 	var names []string
@@ -351,7 +351,7 @@ func (m Model) sessionCard(w, h int) string {
 	lines := []string{
 		row("folder", folder),
 		row("routing", routing),
-		row("agents", fmt.Sprintf("%d of %d installed", ready, total)),
+		row("agents", fmt.Sprintf("%d of %d installed", m.installed, total)),
 		row("checks", checks),
 		row("retries", fmt.Sprintf("%d", m.d.MaxRetries)+dimSty.Render(fmt.Sprintf("  ·  timeout %s", m.d.Timeout))),
 		"",

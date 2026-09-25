@@ -125,6 +125,9 @@ type Model struct {
 
 	logs []logEntry
 
+	quitting  bool // ctrl+c during a run: quit once it has been reverted
+	installed int  // agents found on PATH (cached for the session card)
+
 	status   string
 	statusAt time.Time
 }
@@ -157,6 +160,13 @@ func New(d Deps) Model {
 	}
 	if m.inRepo {
 		m.branch = gitutil.Branch(d.Dir)
+	}
+	if d.Reg != nil {
+		for _, a := range d.Reg.All() {
+			if a.Health() == nil {
+				m.installed++
+			}
+		}
 	}
 	m.reload()
 	m.setChatContent()
@@ -293,8 +303,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
-		if m.run != nil && m.run.cancel != nil {
+		// Mid-run, cancel first so the agent's partial edits are reverted,
+		// then quit when the run reports back. A second ctrl+c forces it.
+		if m.cstate == chatRunning && !m.quitting {
+			m.quitting = true
+			m.run.cancelled = true
 			m.run.cancel()
+			m.setStatus("cancelling and reverting before quitting… (ctrl+c again to force)")
+			return m, nil
 		}
 		return m, tea.Quit
 	case "tab":

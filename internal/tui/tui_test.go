@@ -482,3 +482,45 @@ func TestRenderMarkdown(t *testing.T) {
 		t.Fatalf("markdown not rendered (raw ** present):\n%s", out)
 	}
 }
+
+// ctrl+c mid-run must not strand the agent's partial edits: it cancels,
+// reverts, and only then quits.
+func TestCtrlCDuringRunRevertsThenQuits(t *testing.T) {
+	dir := t.TempDir()
+	reg := fakeAgent(t, "echo partial > half.txt\nsleep 20\n")
+	m := testModelIn(dir, reg, nil, 100, 30)
+	m.ta.SetValue("slow task")
+	nm, _ := m.submitChat()
+	m = nm.(Model)
+	go runTurn(m.run.ctx, m.d, m.run.task, m.run.ch)
+	for i := 0; ; i++ {
+		if _, err := os.Stat(filepath.Join(dir, "half.txt")); err == nil {
+			break
+		}
+		if i > 200 {
+			t.Fatal("agent never started")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	nm, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = nm.(Model)
+	if cmd != nil || !m.quitting {
+		t.Fatal("first ctrl+c during a run should cancel, not quit yet")
+	}
+	for {
+		nm, cmd = m.Update(<-m.run.ch)
+		m = nm.(Model)
+		if m.cstate != chatRunning {
+			break
+		}
+	}
+	if cmd == nil {
+		t.Fatal("should quit once the run is reverted")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatal("expected a quit command")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "half.txt")); !os.IsNotExist(err) {
+		t.Fatal("partial change should be reverted before quitting")
+	}
+}

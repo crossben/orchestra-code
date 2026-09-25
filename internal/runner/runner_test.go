@@ -43,3 +43,16 @@ func TestRunProbeCancelKillsChildren(t *testing.T) {
 		t.Fatalf("cancel took %s", d)
 	}
 }
+
+// An agent that exits 0 but leaves a background child holding the output
+// pipe must still count as a clean, prompt exit.
+func TestRunProbeLingeringChildIsCleanExit(t *testing.T) {
+	start := time.Now()
+	_, res, err := RunProbe(context.Background(), Spec{Bin: "sh", Args: []string{"-c", "sleep 30 & echo started"}, Dir: t.TempDir()})
+	if err != nil || res.ExitCode != 0 {
+		t.Fatalf("want clean exit, got code=%d err=%v", res.ExitCode, err)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Fatalf("waited %s on a lingering child", d)
+	}
+}
