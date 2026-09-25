@@ -290,6 +290,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.onRunMsg(msg)
 	case tea.KeyMsg:
 		return m.onKey(msg)
+	case tea.MouseMsg:
+		return m.onMouse(msg), nil
 	}
 	// Non-key messages (e.g. cursor blink) go to the input.
 	if m.active == tabChat && m.cstate == chatIdle {
@@ -361,6 +363,44 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.openSelected()
 	}
 	return m, nil
+}
+
+// wheelLines is how far one mouse-wheel notch scrolls.
+const wheelLines = 3
+
+// onMouse scrolls whatever is under focus with the wheel: the transcript, an
+// open diff, or the selection in a list.
+func (m Model) onMouse(msg tea.MouseMsg) Model {
+	if msg.Action != tea.MouseActionPress {
+		return m
+	}
+	var dir int
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		dir = -1
+	case tea.MouseButtonWheelDown:
+		dir = 1
+	default:
+		return m
+	}
+	scroll := func(vp *viewport.Model) {
+		if dir < 0 {
+			vp.LineUp(wheelLines)
+		} else {
+			vp.LineDown(wheelLines)
+		}
+	}
+	switch {
+	case m.browsing:
+		scroll(&m.browse.vp)
+	case m.active == tabChat && m.cstate == chatReviewing:
+		scroll(&m.rv.vp)
+	case m.active == tabChat:
+		scroll(&m.vp)
+	case m.active == tabChanges, m.active == tabHistory:
+		m.moveSel(dir)
+	}
+	return m
 }
 
 func (m Model) switchTab(t tab) Model {

@@ -62,7 +62,9 @@ func newDashboardCmd() *cobra.Command {
 				Principles:   config.PrinciplesText(cfg.Principles),
 				DefaultAgent: cfg.DefaultAgent,
 			})
-			p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithContext(cmd.Context()))
+			// Mouse reporting enables wheel scrolling; to select text for
+			// copying, most terminals need shift held while dragging.
+			p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithContext(cmd.Context()))
 			_, err = p.Run()
 			return err
 		},

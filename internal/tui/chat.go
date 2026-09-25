@@ -89,6 +89,14 @@ func (m Model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "enter":
 		return m.submitChat()
+	case "up", "down":
+		// With nothing typed, the arrows scroll the conversation; once there is
+		// text they move the cursor in the input as usual.
+		if strings.TrimSpace(m.ta.Value()) == "" {
+			var cmd tea.Cmd
+			m.vp, cmd = m.vp.Update(msg)
+			return m, cmd
+		}
 	case "pgup", "pgdown":
 		var cmd tea.Cmd
 		m.vp, cmd = m.vp.Update(msg)

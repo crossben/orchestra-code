@@ -71,6 +71,8 @@ func (m Model) statusBar() string {
 		right = dimSty.Render(m.status)
 	case m.cstate == chatRunning && m.run != nil:
 		right = warnSty.Render(fmtElapsed(time.Since(m.run.start)))
+	case m.active == tabChat && m.cstate == chatIdle && !m.browsing && !m.vp.AtBottom():
+		right = dimSty.Render(fmt.Sprintf("scrolled · %d%%", int(m.vp.ScrollPercent()*100)))
 	}
 
 	left := mode + " " + hints
@@ -94,7 +96,7 @@ func (m Model) hints() []string {
 		case chatReviewing:
 			return append(m.rv.hints(), "tab switch")
 		}
-		return []string{"enter send", "ctrl+j newline", "pgup/pgdn scroll", "tab switch", "ctrl+c quit"}
+		return []string{"enter send", "ctrl+j newline", "↑↓/wheel scroll", "tab switch", "ctrl+c quit"}
 	case tabChanges, tabHistory:
 		return []string{"↑↓ select", "enter open", "r refresh", "tab switch", "q quit"}
 	case tabAgents:

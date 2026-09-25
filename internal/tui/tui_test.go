@@ -552,3 +552,68 @@ func TestSysLineWrapKeepsIndent(t *testing.T) {
 		}
 	}
 }
+
+// longAnswer puts a many-screen reply in the transcript, scrolled to the end.
+func longAnswer(t *testing.T) Model {
+	t.Helper()
+	m := testModelIn(".", nil, nil, 120, 30)
+	m.messages = []chatLine{{role: "you", text: "explain"}}
+	m.cstate = chatRunning
+	m.run = &liveRun{task: "explain", start: time.Now()}
+	var b strings.Builder
+	b.WriteString("FIRSTLINE of the answer\n\n")
+	for i := 0; i < 80; i++ {
+		b.WriteString("a paragraph of the explanation\n\n")
+	}
+	nm, _ := m.onTurn(turnMsg{turn: engine.Turn{AgentText: b.String()}, answered: true})
+	m = nm.(Model)
+	if m.vp.AtTop() || strings.Contains(m.View(), "FIRSTLINE") {
+		t.Fatal("a long answer should open scrolled to its end")
+	}
+	return m
+}
+
+func TestLongAnswerScrollsToTopWithArrows(t *testing.T) {
+	m := longAnswer(t)
+	for i := 0; i < 400 && !m.vp.AtTop(); i++ {
+		m = press(m, "up")
+	}
+	if !strings.Contains(m.View(), "FIRSTLINE") {
+		t.Fatal("↑ with an empty input should scroll back to the start")
+	}
+	if !strings.Contains(m.View(), "scrolled") {
+		t.Fatal("status bar should say the transcript is scrolled")
+	}
+	// With text typed, arrows belong to the input again.
+	m = press(m, "hi")
+	before := m.vp.YOffset
+	m = press(m, "down")
+	if m.vp.YOffset != before {
+		t.Fatal("arrows should not scroll while there is text in the input")
+	}
+}
+
+func TestLongAnswerScrollsWithMouseWheel(t *testing.T) {
+	m := longAnswer(t)
+	wheel := func(m Model, b tea.MouseButton) Model {
+		nm, _ := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: b})
+		return nm.(Model)
+	}
+	for i := 0; i < 200 && !m.vp.AtTop(); i++ {
+		m = wheel(m, tea.MouseButtonWheelUp)
+	}
+	if !strings.Contains(m.View(), "FIRSTLINE") {
+		t.Fatal("wheel up should scroll back to the start")
+	}
+	m = wheel(m, tea.MouseButtonWheelDown)
+	if m.vp.YOffset != wheelLines {
+		t.Fatalf("wheel down should scroll %d lines, offset=%d", wheelLines, m.vp.YOffset)
+	}
+	// In History the wheel moves the selection.
+	h := m.switchTab(tabHistory)
+	h.runs = []memory.Run{{Agent: "a", Prompt: "one"}, {Agent: "a", Prompt: "two"}}
+	h.reload()
+	if h = wheel(h, tea.MouseButtonWheelDown); h.histSel != 1 {
+		t.Fatalf("wheel should move the History selection, sel=%d", h.histSel)
+	}
+}
