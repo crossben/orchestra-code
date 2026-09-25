@@ -1,6 +1,6 @@
 # Extending Orchestra — adding agents
 
-Orchestra treats every agent as an interchangeable component behind one interface. There are two
+Orchestra treats every agent as an interchangeable component behind one interface. There are three
 ways to add one, from easiest to deepest.
 
 ---
@@ -60,7 +60,41 @@ You'll see the full supervised loop against your custom agent.
 
 ---
 
-## 2. Implement the `Agent` interface (for a built-in / non-CLI agent)
+## 2. Add an API-backed agent via config (no code)
+
+If you'd rather call a hosted LLM directly than spawn a CLI, register an agent with
+`type: api`. Orchestra sends the model a bounded snapshot of your repository plus the task,
+the model replies with changes (a unified diff or whole-file blocks), Orchestra applies them
+to the working tree, and everything flows through the same supervised loop:
+validate → retry → diff review.
+
+```yaml
+agents:
+  - name: gpt
+    type: api
+    provider: openai          # openai | anthropic
+    model: gpt-4o             # required
+    # api_base: https://api.openai.com/v1        # optional override (OpenRouter, Groq,
+    #                                             # Ollama, vLLM… all speak the openai format)
+    api_key_env: OPENAI_API_KEY                  # env var holding the key (provider default)
+    context_budget: 98304                        # repo snapshot byte cap (default 96 KiB)
+    capabilities: [plan, implement, review]
+```
+
+Notes:
+- The API key is read from the environment at run time — never put keys in the YAML.
+- `orchestra agents` shows these as `(api: <provider>/<model>)`, and `--probe` runs a real
+  tiny completion so auth/billing problems surface with actionable detail.
+- Because the model cannot explore the repo itself, the snapshot it receives matters: keep
+  the tree lean, and raise `context_budget` if tasks touch many files.
+- Self-correction works like any agent: on validation failure the failure text is fed back
+  and the model re-edits its own prior changes in place.
+- Works everywhere CLI agents do: `run`, shell, dashboard chat, planning, routing, and even
+  `do --parallel` worktrees (patches apply inside each isolated worktree).
+
+---
+
+## 3. Implement the `Agent` interface (for a built-in / non-CLI agent)
 
 For agents that aren't a subprocess (e.g. a direct API/gRPC client), implement the interface in
 [`internal/agent/agent.go`](../internal/agent/agent.go):

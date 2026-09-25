@@ -56,14 +56,18 @@ func newDoCmd() *cobra.Command {
 				agentName = cfg.DefaultAgent
 			}
 
-			// Git pre-flight — the workflow commits/merges; start clean.
-			if !gitutil.IsRepo(flagDir) {
-				return errNotRepo(flagDir)
+			// Git pre-flight: sequential mode works anywhere (snapshot-tracked),
+			// but --parallel isolates steps in git worktrees, so it needs a repo.
+			inRepo := gitutil.IsRepo(flagDir)
+			if parallel && !inRepo {
+				return fmt.Errorf("--parallel needs a git repository (each step runs in an isolated worktree); run inside a repo, or drop --parallel for step-by-step supervision")
 			}
-			if clean, err := gitutil.IsClean(flagDir); err != nil {
-				return err
-			} else if !clean {
-				return errDirty()
+			if inRepo {
+				if clean, err := gitutil.IsClean(flagDir); err != nil {
+					return err
+				} else if !clean {
+					return errDirty()
+				}
 			}
 
 			reg := cfg.BuildRegistry()

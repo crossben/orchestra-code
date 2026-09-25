@@ -55,30 +55,44 @@ func New(reg *agent.Registry, dir, defaultAgent string, stages []validate.Stage,
 	}
 }
 
-// Run drives the read-eval loop until EOF or /exit.
+// Run drives the read-eval loop until EOF, /exit, or context cancellation (Ctrl+C).
 func (s *Shell) Run(ctx context.Context) error {
 	s.banner()
+	type lineResult struct {
+		line string
+		err  error
+	}
 	for {
 		fmt.Printf("\n%s %s ", ui.Accent("orchestra")+ui.Dim(" ("+s.promptTag()+")"), ui.Accent2("›"))
-		line, err := s.in.ReadString('\n')
-		if err == io.EOF {
+		ch := make(chan lineResult, 1)
+		go func() {
+			line, err := s.in.ReadString('\n')
+			ch <- lineResult{line, err}
+		}()
+		select {
+		case <-ctx.Done():
 			fmt.Println("\nbye 👋")
 			return nil
-		}
-		if err != nil {
-			return err
-		}
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if strings.HasPrefix(line, "/") {
-			if s.command(line) { // returns true to exit
+		case res := <-ch:
+			if res.err == io.EOF {
+				fmt.Println("\nbye 👋")
 				return nil
 			}
-			continue
+			if res.err != nil {
+				return res.err
+			}
+			line := strings.TrimSpace(res.line)
+			if line == "" {
+				continue
+			}
+			if strings.HasPrefix(line, "/") {
+				if s.command(line) {
+					return nil
+				}
+				continue
+			}
+			s.handle(ctx, line)
 		}
-		s.handle(ctx, line)
 	}
 }
 

@@ -234,7 +234,7 @@ The nice-to-haves that make the project stand out — build only once the core i
   lines. Auto-disables color/animation when piped or `NO_COLOR` is set (regression stays green). The
   full-screen dashboard below is still the later, larger effort.
 - **TUI dashboard (Bubble Tea) 🟡 MOSTLY DONE:** `orchestra dashboard` — full-screen tabbed UI:
-  Agents (+ live health probe), History, Benchmarks, and a **Chat** tab. Chat hands the terminal to the
+  Logs, Agents (+ live health probe), History, Benchmarks, Changes (per-file diff stats), and a **Chat** tab. Chat hands the terminal to the
   full supervised engine via `tea.Exec` (route → run → validate → accept/reject, like the shell), then
   returns and refreshes. Keyboard nav, gradient styling. **Chat is now in-pane:** the agent runs in the
   background (spinner), then the diff renders inside the dashboard for accept (`y`, commits) / reject
@@ -251,6 +251,13 @@ The nice-to-haves that make the project stand out — build only once the core i
   implement the interface (+ optional Querier/Prober/QuietRunner/QuietQuerier). Documented in
   [docs/EXTENDING.md](docs/EXTENDING.md) with a runnable example ([examples/](examples/)). A full runtime
   binary-plugin loader is intentionally skipped — the config path already covers third-party tools.
+- **API-backed agents ✅ DONE:** `APIAgent` (`type: api` in orchestra.yaml) calls an HTTP LLM directly —
+  `internal/llm` (openai-compatible + anthropic providers, stdlib only) — sends a bounded repo snapshot,
+  and applies the returned patch via `internal/patch` (`git apply --check` first, traversal-guarded
+  writes). Implements `Querier`/`Prober`, so it can also plan and route. No engine/router/scheduler changes.
+- **Git-free supervision ✅ DONE:** outside a repository the engine snapshots the directory
+  (`internal/fsdiff`), shows a git-style diff against the snapshot, and restores it on reject — so
+  `run`/`do`/shell work in plain folders. `--parallel` and `benchmark` still require git (worktrees).
 - **Context engine:** *deferred* — the supported agents gather their own repo context, so pre-selecting a
   file slice is largely redundant. Revisit only if token/cost becomes a measured problem.
 

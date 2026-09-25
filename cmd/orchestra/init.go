@@ -59,6 +59,16 @@ agents:
     bin: mimo
     args: ["run", "--dangerously-skip-permissions"]
     capabilities: [implement, review]
+
+  # API-backed agent (no CLI needed): Orchestra sends the model a snapshot of
+  # the repo and applies the returned patch itself. Uncomment and set the key:
+  #
+  # - name: gpt
+  #   type: api
+  #   provider: openai        # openai | anthropic (OpenRouter/Groq/Ollama work via openai + api_base)
+  #   model: gpt-4o
+  #   api_key_env: OPENAI_API_KEY
+  #   capabilities: [plan, implement, review]
 `
 
 func newInitCmd() *cobra.Command {

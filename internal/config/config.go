@@ -19,13 +19,23 @@ import (
 // ConfigFileNames are the filenames Load looks for, in order.
 var ConfigFileNames = []string{"orchestra.yaml", "orchestra.yml", ".orchestra.yaml"}
 
-// AgentConfig describes how to invoke one agent CLI.
+// AgentConfig describes how to invoke one agent. The default type is "cli":
+// bin + args spawn a headless subprocess. type "api" instead calls an LLM over
+// HTTP (provider/model), with Orchestra applying the returned patch itself.
 type AgentConfig struct {
 	Name         string   `yaml:"name"`
-	Bin          string   `yaml:"bin"`          // binary on PATH (defaults to Name)
-	Args         []string `yaml:"args"`         // headless/auto-approve prefix; task appended
-	DirFlag      string   `yaml:"dir_flag"`     // flag to pass the working dir (for CLIs that ignore cwd, e.g. opencode "--dir")
+	Type         string   `yaml:"type"`         // "" | "cli" (default) | "api"
+	Bin          string   `yaml:"bin"`          // cli: binary on PATH (defaults to Name)
+	Args         []string `yaml:"args"`         // cli: headless/auto-approve prefix; task appended
+	DirFlag      string   `yaml:"dir_flag"`     // cli: flag to pass the working dir (e.g. opencode "--dir")
 	Capabilities []string `yaml:"capabilities"` // plan|implement|review
+
+	// API-agent fields (used when Type == "api").
+	Provider      string `yaml:"provider"`       // openai (default) | anthropic
+	Model         string `yaml:"model"`          // required
+	APIBase       string `yaml:"api_base"`       // optional endpoint override
+	APIKeyEnv     string `yaml:"api_key_env"`    // env var holding the key (provider default)
+	ContextBudget int    `yaml:"context_budget"` // repo-snapshot byte cap (0 → DefaultContextBudget)
 }
 
 // ValidateConfig configures the validation pipeline. Any empty stage is skipped.
@@ -327,17 +337,29 @@ func (c *Config) BuildRouter(reg *agent.Registry) (*router.Router, error) {
 	return router.New(cls, answerer, reg, c.Router.Routes, c.DefaultAgent), nil
 }
 
-// BuildRegistry turns the config's agents into a live agent.Registry.
+// BuildRegistry turns the config's agents into a live agent.Registry. Agents
+// with type "api" become APIAgent instances (HTTP-backed); everything else is
+// a CLIAgent. A misconfigured agent is skipped with a warning rather than
+// failing the whole registry — consistent with best-effort startup elsewhere.
 func (c *Config) BuildRegistry() *agent.Registry {
 	reg := agent.NewRegistry()
 	for _, ac := range c.Agents {
-		bin := ac.Bin
-		if bin == "" {
-			bin = ac.Name
-		}
 		caps := make([]agent.Capability, 0, len(ac.Capabilities))
 		for _, cp := range ac.Capabilities {
 			caps = append(caps, agent.Capability(cp))
+		}
+		if ac.Type == "api" {
+			a, err := agent.NewAPI(ac.Name, ac.Provider, ac.Model, ac.APIBase, ac.APIKeyEnv, caps, ac.ContextBudget)
+			if err != nil {
+				fmt.Printf("(warning: skipping api agent %q: %v)\n", ac.Name, err)
+				continue
+			}
+			reg.Add(a)
+			continue
+		}
+		bin := ac.Bin
+		if bin == "" {
+			bin = ac.Name
 		}
 		reg.Add(agent.New(ac.Name, bin, ac.Args, ac.DirFlag, caps))
 	}

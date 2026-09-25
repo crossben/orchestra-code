@@ -71,7 +71,7 @@ func newBenchmarkCmd() *cobra.Command {
 				return err
 			}
 			if !gitutil.IsRepo(flagDir) {
-				return errNotRepo(flagDir)
+				return fmt.Errorf("benchmark needs a git repository — every agent runs in an isolated worktree so their changes never collide")
 			}
 			if clean, err := gitutil.IsClean(flagDir); err != nil {
 				return err

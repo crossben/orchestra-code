@@ -28,6 +28,7 @@ func key(s string) tea.KeyMsg {
 
 func TestViewRendersAgentsTab(t *testing.T) {
 	m := testModel()
+	m.active = tabAgents
 	view := m.View()
 	for _, want := range []string{"ORCHESTRA", "Agents", "History", "Benchmarks", "AGENT", "alpha", "beta", "quit"} {
 		if !strings.Contains(view, want) {
@@ -38,8 +39,8 @@ func TestViewRendersAgentsTab(t *testing.T) {
 
 func TestTabSwitching(t *testing.T) {
 	m := testModel()
-	// switch to History (key "2")
-	nm, _ := m.Update(key("2"))
+	// switch to History (key "3")
+	nm, _ := m.Update(key("3"))
 	m = nm.(Model)
 	if m.active != tabHistory {
 		t.Fatalf("expected History tab, got %d", m.active)
@@ -87,13 +88,13 @@ func TestChatTabTypingAndBackspace(t *testing.T) {
 	m = nm.(Model)
 	nm, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
 	m = nm.(Model)
-	if m.ti.Value() != "hi x" {
-		t.Fatalf("expected input %q, got %q", "hi x", m.ti.Value())
+	if m.ta.Value() != "hi x" {
+		t.Fatalf("expected input %q, got %q", "hi x", m.ta.Value())
 	}
 	nm, _ = m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
 	m = nm.(Model)
-	if m.ti.Value() != "hi " {
-		t.Fatalf("backspace failed, got %q", m.ti.Value())
+	if m.ta.Value() != "hi " {
+		t.Fatalf("backspace failed, got %q", m.ta.Value())
 	}
 	if !strings.Contains(m.View(), "Chat") {
 		t.Fatal("chat view should render")
@@ -113,7 +114,7 @@ func TestChatEscLeavesTab(t *testing.T) {
 func TestChatEmptySubmitNoop(t *testing.T) {
 	m := testModel()
 	m.active = tabChat
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // empty input
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // empty input = noop
 	if cmd != nil {
 		t.Fatal("submitting empty input should not launch a command")
 	}
@@ -121,10 +122,10 @@ func TestChatEmptySubmitNoop(t *testing.T) {
 
 func TestChatTabInNav(t *testing.T) {
 	m := testModel()
-	nm, _ := m.Update(key("4"))
+	nm, _ := m.Update(key("6"))
 	m = nm.(Model)
 	if m.active != tabChat {
-		t.Fatalf("key 4 should select Chat, got %d", m.active)
+		t.Fatalf("key 6 should select Chat, got %d", m.active)
 	}
 }
 
@@ -139,15 +140,15 @@ func TestChatTabNavigatesWhileTyping(t *testing.T) {
 	if m.active == tabChat {
 		t.Fatal("tab should navigate out of chat while typing")
 	}
-	if m.ti.Value() != "hello" {
-		t.Fatalf("input should be preserved on nav, got %q", m.ti.Value())
+	if m.ta.Value() != "hello" {
+		t.Fatalf("input should be preserved on nav, got %q", m.ta.Value())
 	}
 }
 
 func TestChatSubmitEntersRunning(t *testing.T) {
 	m := testModel()
 	m.active = tabChat
-	m.ti.SetValue("do a thing")
+	m.ta.SetValue("do a thing")
 	nm, cmd := m.submitChat()
 	m = nm.(Model)
 	if m.cstate != chatRunning {
