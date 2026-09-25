@@ -233,15 +233,18 @@ The nice-to-haves that make the project stand out — build only once the core i
   with reveal animation, TTY-gated spinners during routing/planning/answering, colored diffs and status
   lines. Auto-disables color/animation when piped or `NO_COLOR` is set (regression stays green). The
   full-screen dashboard below is still the later, larger effort.
-- **TUI dashboard (Bubble Tea) 🟡 MOSTLY DONE:** `orchestra dashboard` — full-screen tabbed UI:
+- **TUI dashboard (Bubble Tea) ✅ DONE:** `orchestra dashboard` — full-screen tabbed UI:
   Logs, Agents (+ live health probe), History, Benchmarks, Changes (per-file diff stats), and a **Chat** tab. Chat hands the terminal to the
   full supervised engine via `tea.Exec` (route → run → validate → accept/reject, like the shell), then
   returns and refreshes. Keyboard nav, gradient styling. **Chat is now in-pane:** the agent runs in the
   background (spinner), then the diff renders inside the dashboard for accept (`y`, commits) / reject
   (`n`, reverts) — via `engine.Produce` (quiet run) + `agent.RunQuiet`, on bubbles `viewport`/`textinput`
   with **chroma** diff highlighting, and **in-pane AI routing** (quiet classify/answer so nothing corrupts
-  the render). **Follow-up:** live *in-render* streaming of in-run waves/steps/logs (engine event emission)
-  — would also tidy interleaved output during `do --parallel`/`benchmark`.
+  the render). **Live runs** (2026-09): the engine emits optional progress events and streams agent
+  output (`engine.Options.OnEvent`/`Output`), shown in a run panel; a file-by-file review screen is shared
+  by Chat, Changes and History; diffs persist in memory so past changes reopen after a restart
+  (design: docs/superpowers/specs/2026-09-25-dashboard-ui-design.md). **Follow-up:** the same events could
+  tidy the interleaved output of `do --parallel`/`benchmark`.
 - **Benchmark mode ✅ DONE:** `orchestra benchmark "<task>"` runs the task through every available
   agent, each in an isolated git worktree (parallel), then ranks a leaderboard by validation → retries
   → speed → diff size, offers to merge the winner, and records results to SQLite (`benchmarks` table)
