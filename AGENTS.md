@@ -44,7 +44,7 @@ Binary is at `bin/orchestra` (gitignored).
 - `internal/validate/` — build → lint → test pipeline, auto-detects toolchain, stops on first failure.
 - `internal/config/` — YAML config + built-in agent defaults + toolchain auto-detection.
 - `internal/memory/` — SQLite history at `~/.orchestra/orchestra.db` (never in the repo tree).
-- `internal/tui/` — Bubble Tea dashboard (agents, history, benchmarks, chat tabs).
+- `internal/tui/` — Bubble Tea dashboard: Chat (live run panel + file-by-file review), Changes, History, Agents, Benchmarks, Logs. One file per concern (chat, live, review, views, chrome, theme, table).
 - `internal/ui/` — terminal styling (gradients, spinners, diffs). TTY-aware.
 - `internal/shell/` — interactive chat REPL.
 - `internal/review/` — diff display + accept/reject prompt.
@@ -117,9 +117,12 @@ The dashboard (`internal/tui/`) uses Charm's ecosystem:
 - **Bubble Tea** — Elm-architecture TUI framework
 - **Lipgloss** — terminal styling
 - **Glamour** — markdown rendering
-- **Chroma** — syntax-highlighted diffs
 
-These are not interchangeable with other TUI frameworks. Tests are headless (`tui_test.go` renders views without a TTY by injecting `WindowSizeMsg`).
+Diffs are coloured by a small built-in renderer (`internal/tui/highlight.go`). Colours are `lipgloss.AdaptiveColor`s defined once in `theme.go` — add new styles there, not inline.
+
+Live runs: the dashboard calls `engine.Produce` with `OnEvent` (attempt / agent-exit / validation-stage events) and `Output` (streamed agent output), forwarded to Bubble Tea over a channel (`live.go`). Both hooks are optional — `run`, `do` and the shell leave them nil.
+
+These are not interchangeable with other TUI frameworks. Tests are headless (`tui_test.go` renders views without a TTY by injecting `WindowSizeMsg`); end-to-end chat tests drive the real worker with fake-agent shell scripts.
 
 ## Router is CLI-based
 

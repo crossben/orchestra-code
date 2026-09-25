@@ -6,6 +6,7 @@ package runner
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -20,6 +21,10 @@ type Spec struct {
 	Dir     string        // working directory
 	Timeout time.Duration // hard cap on runtime (0 = none)
 	Env     []string      // extra environment (appended to os.Environ)
+
+	// Output, if set, additionally receives the combined stdout+stderr as it is
+	// produced. Only RunProbe honours it (the quiet path the dashboard streams).
+	Output io.Writer
 }
 
 // Result reports how the process finished.
@@ -164,9 +169,18 @@ func RunProbe(ctx context.Context, spec Spec) (string, Result, error) {
 	var buf bytes.Buffer
 	cmd := exec.CommandContext(ctx, spec.Bin, spec.Args...)
 	cmd.Dir = spec.Dir
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
+	// One writer value for both streams: exec then serialises the writes.
+	var w io.Writer = &buf
+	if spec.Output != nil {
+		w = io.MultiWriter(&buf, spec.Output)
+	}
+	cmd.Stdout = w
+	cmd.Stderr = w
 	cmd.Env = append(os.Environ(), spec.Env...)
+	// The dashboard cancels runs: take the agent's children down with it, and
+	// don't wait long on pipes a stray grandchild may still hold open.
+	killTree(cmd)
+	cmd.WaitDelay = 2 * time.Second
 
 	start := time.Now()
 	err := cmd.Run()
@@ -181,6 +195,11 @@ func RunProbe(ctx context.Context, spec Spec) (string, Result, error) {
 	}
 	if exitErr, ok := err.(*exec.ExitError); ok {
 		return out, Result{ExitCode: exitErr.ExitCode(), Duration: dur}, nil
+	}
+	// The agent exited 0 but something it spawned kept the output pipe open
+	// past WaitDelay: the run itself succeeded.
+	if errors.Is(err, exec.ErrWaitDelay) {
+		return out, Result{ExitCode: 0, Duration: dur}, nil
 	}
 	if err != nil {
 		return out, Result{ExitCode: -1, Duration: dur}, err

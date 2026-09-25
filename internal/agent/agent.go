@@ -9,6 +9,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,6 +35,10 @@ type Task struct {
 	Prompt  string
 	Dir     string
 	Timeout time.Duration
+
+	// Output, if set, receives the agent's output live during RunQuiet (the
+	// dashboard streams it into its run panel). Nil = capture only.
+	Output io.Writer
 }
 
 // Result reports how an agent run finished.
@@ -222,5 +227,6 @@ func (a *CLIAgent) spec(task Task) runner.Spec {
 		Args:    args,
 		Dir:     dir,
 		Timeout: task.Timeout,
+		Output:  task.Output,
 	}
 }

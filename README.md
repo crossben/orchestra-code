@@ -113,23 +113,33 @@ orchestra history --all  # across all projects
 
 ### Dashboard (TUI)
 
-A full-screen dashboard over your agents, run history, and benchmark results:
+A full-screen dashboard where you send tasks, watch agents work, and review their changes:
 
 ```sh
 orchestra dashboard      # or: orchestra dash
 ```
 
-Tabs: **Agents** (installed + live `p`robe of whether each can actually run), **History** (recent runs),
-**Benchmarks** (past leaderboards), and **Chat**. Keys: `tab` switch • `p` probe • `r` refresh • `q` quit.
+It opens on **Chat**. Type a task (`enter` sends, `ctrl+j` adds a newline) and a **live run panel**
+shows routing, each attempt, the agent's output as it streams, and every validation stage
+(`build → lint → test`) as it passes or fails. Failed checks retry automatically. `esc` cancels a run and
+reverts whatever the agent already changed. The panel sits beside the chat on wide terminals and stacks
+below it on narrow ones.
 
-In the **Chat** tab you type in a proper input box; the agent runs **in the background** (spinner, no
-screen flip), then the **syntax-highlighted diff** appears in a **scrollable pane** for you to **accept**
-(`y`, commits) or **reject** (`n`, reverts). Validation + self-correction run first. When the AI router is
-enabled, chat **auto-routes** each message to the best agent (or answers plain questions inline) with a
-`↳ routed to …` note; otherwise it uses the default agent. The transcript scrolls (`↑/↓`, `pgup/pgdn`);
-`tab` navigates away anytime (even mid-typing); `esc` leaves chat. Agent replies are rendered as
-**markdown**. (Built on Charm's `viewport`/`textinput` for redraw, `glamour` for markdown, and `chroma`
-for diff highlighting.)
+When the agent is done you get a **review screen**: a file list with `+/−` counts, the selected file's
+diff, validation badges, and the failing check's output if there is one. `[` / `]` move between files, `a`
+shows all files, `↑↓` scrolls, then `y` accepts (commits in a git repo) or `n` rejects (reverts). With the
+AI router enabled, each message is routed to the best agent, and plain questions are answered inline.
+
+The other tabs:
+
+- **Changes**: every diff you accepted or rejected. Reopen any of them with `enter`, even after a restart.
+- **History**: all runs with outcome, attempts and checks.
+- **Agents**: installed, live `p`robe, runs, accept rate and last use.
+- **Benchmarks**: past leaderboards.
+- **Logs**: this session's events.
+
+Keys: `tab` / `1`–`6` switch tabs (digits outside Chat), `r` refresh, `q` quit (outside Chat), `ctrl+c` quit.
+Colors adapt to light and dark terminals.
 
 ### Benchmark agents
 

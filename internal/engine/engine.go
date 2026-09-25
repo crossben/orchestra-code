@@ -13,6 +13,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 	"time"
@@ -50,6 +51,39 @@ type Options struct {
 	// Principles is an optional lean-code preamble prepended to the task (see
 	// config.PrinciplesText). Empty = off.
 	Principles string
+
+	// OnEvent, if set, is told about progress during Produce (attempts, agent
+	// exit, each validation stage). Output, if set, receives the agent's output
+	// live. Both are for the dashboard; nil keeps the quiet behaviour.
+	OnEvent func(Event)
+	Output  io.Writer
+}
+
+// EventKind identifies a progress event emitted by Produce.
+type EventKind int
+
+const (
+	EventAttempt    EventKind = iota // an attempt is starting (Attempt, Max)
+	EventAgentDone                   // the agent exited (ExitCode, Duration)
+	EventStageStart                  // a validation stage started (Stage)
+	EventStageDone                   // a validation stage finished (Stage, Passed)
+)
+
+// Event is one progress notification from Produce.
+type Event struct {
+	Kind     EventKind
+	Attempt  int
+	Max      int
+	Stage    string
+	Passed   bool
+	ExitCode int
+	Duration time.Duration
+}
+
+func (o Options) emit(e Event) {
+	if o.OnEvent != nil {
+		o.OnEvent(e)
+	}
 }
 
 func (o Options) logf(format string, a ...any) {
@@ -67,6 +101,7 @@ type Outcome struct {
 	Report     validate.Report
 	HadChanges bool
 	Accepted   bool
+	Diff       string // the reviewed diff ("" when nothing changed)
 }
 
 // Execute runs the full supervised pipeline once (including retries). The reader
@@ -104,6 +139,7 @@ func Execute(ctx context.Context, in *bufio.Reader, opts Options) (out Outcome, 
 		return out, nil
 	}
 	out.HadChanges = true
+	out.Diff = diff
 
 	out.Accepted = review.Prompt(in, diff, out.Report)
 	if out.Accepted {
@@ -263,10 +299,12 @@ func Produce(ctx context.Context, opts Options) Turn {
 	maxAttempts := opts.MaxRetries + 1
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		t.Attempts = attempt
+		opts.emit(Event{Kind: EventAttempt, Attempt: attempt, Max: maxAttempts})
 		res, err := quietRun(ctx, opts.Agent, agent.Task{
 			Prompt:  taskGuardrail + opts.Principles + prompt,
 			Dir:     opts.Dir,
 			Timeout: opts.Timeout,
+			Output:  opts.Output,
 		})
 		if err != nil {
 			t.Err = err
@@ -274,7 +312,14 @@ func Produce(ctx context.Context, opts Options) Turn {
 		}
 		t.ExitCode = res.ExitCode
 		t.AgentText = res.Output
-		t.Report = validate.RunPipeline(ctx, opts.Dir, opts.Stages)
+		opts.emit(Event{Kind: EventAgentDone, Attempt: attempt, Max: maxAttempts, ExitCode: res.ExitCode, Duration: res.Duration})
+		t.Report = validate.RunPipelineObserved(ctx, opts.Dir, opts.Stages, func(done bool, r validate.StageResult) {
+			if done {
+				opts.emit(Event{Kind: EventStageDone, Attempt: attempt, Max: maxAttempts, Stage: r.Name, Passed: r.Passed})
+			} else {
+				opts.emit(Event{Kind: EventStageStart, Attempt: attempt, Max: maxAttempts, Stage: r.Name})
+			}
+		})
 		if t.Report.Skipped || t.Report.Passed() || attempt == maxAttempts {
 			break
 		}
@@ -366,6 +411,7 @@ func ExecuteHeadless(ctx context.Context, opts Options) (out Outcome, err error)
 		return out, nil
 	}
 	out.HadChanges = true
+	out.Diff = diff
 	if err := gitutil.Commit(opts.Dir, commitMessage(opts.Prompt)); err != nil {
 		return out, fmt.Errorf("commit changes: %w", err)
 	}
@@ -389,6 +435,7 @@ func recordMemory(opts Options, out Outcome, outcome string) {
 		Outcome:  outcome,
 		Attempts: out.Attempts,
 		Passed:   out.Report.Passed(),
+		Diff:     out.Diff,
 	}, time.Now()); rerr != nil {
 		opts.logf("(warning: could not record to memory: %v)", rerr)
 	}
