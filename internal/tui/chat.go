@@ -152,12 +152,12 @@ func (m Model) onTurn(msg turnMsg) (tea.Model, tea.Cmd) {
 	case msg.answered:
 		run.result = "answered"
 		run.agent = ""
-		m.messages = append(m.messages, chatLine{role: "agent", text: strings.TrimSpace(t.AgentText), agent: "orchestra"})
+		m.messages = append(m.messages, chatLine{role: "agent", text: cleanText(t.AgentText), agent: "orchestra"})
 		m.logEvent("turn", "question answered")
-		ui.Notify("Orchestra", "Answered — "+firstLine(t.AgentText))
+		ui.Notify("Orchestra", "Answered — "+firstLine(cleanText(t.AgentText)))
 	case !t.HadChanges:
 		run.result = "no changes"
-		resp := strings.TrimSpace(t.AgentText)
+		resp := cleanText(t.AgentText)
 		if resp == "" {
 			resp = "(the agent made no file changes)"
 		}
@@ -302,7 +302,8 @@ func sysLine(text string, w int) string {
 	case strings.HasPrefix(text, "↺"), strings.HasPrefix(text, "●"):
 		st = warnSty
 	}
-	return lipgloss.NewStyle().Width(w).Render("  " + st.Render(text))
+	// Padding (not a literal indent) keeps wrapped lines aligned under the first.
+	return lipgloss.NewStyle().Width(w).PaddingLeft(2).Render(st.Render(text))
 }
 
 func (m Model) welcome() string {

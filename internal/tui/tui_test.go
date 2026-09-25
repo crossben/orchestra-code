@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/crossben/orchestra-code/internal/agent"
 	"github.com/crossben/orchestra-code/internal/config"
@@ -522,5 +523,32 @@ func TestCtrlCDuringRunRevertsThenQuits(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "half.txt")); !os.IsNotExist(err) {
 		t.Fatal("partial change should be reverted before quitting")
+	}
+}
+
+// opencode colours its output; the escape codes must not leak into the chat
+// transcript as literal "[0m" (glamour drops ESC but keeps the rest).
+func TestAgentReplyColourCodesStripped(t *testing.T) {
+	m := testModel()
+	m.cstate = chatRunning
+	m.run = &liveRun{task: "hello", start: time.Now(), agent: "opencode"}
+	nm, _ := m.onTurn(turnMsg{turn: engine.Turn{AgentText: "\x1b[0m\n\x1b[1m│ build · big-pickle \x1b[0m Hello!\r\n"}, agent: "opencode", started: true})
+	// Real escape sequences are fine (styling); leftover "[0m" text is not.
+	v := ansi.Strip(nm.(Model).View())
+	if strings.Contains(v, "[0m") || strings.Contains(v, "[1m") {
+		t.Fatalf("colour codes leaked into the transcript:\n%s", v)
+	}
+	if !strings.Contains(v, "Hello!") {
+		t.Fatalf("reply text missing:\n%s", v)
+	}
+}
+
+// A long system note wraps with its continuation lines indented too.
+func TestSysLineWrapKeepsIndent(t *testing.T) {
+	out := sysLine("↳ routed to opencode — classification failed (exec: \"claude\": executable file not found in $PATH); defaulting to implement", 60)
+	for i, l := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(l, "  ") {
+			t.Fatalf("line %d not indented: %q", i, l)
+		}
 	}
 }

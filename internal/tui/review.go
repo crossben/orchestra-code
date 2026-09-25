@@ -250,7 +250,7 @@ func (r reviewer) failureTail() []string {
 		return nil
 	}
 	var lines []string
-	for _, l := range strings.Split(strings.TrimRight(f.Output, "\n"), "\n") {
+	for _, l := range strings.Split(cleanText(f.Output), "\n") {
 		if strings.TrimSpace(l) != "" {
 			lines = append(lines, l)
 		}

@@ -210,6 +210,16 @@ func cleanLine(s string) string {
 	return strings.ReplaceAll(s, "\t", "    ")
 }
 
+// cleanText applies cleanLine to every line of an agent's captured output, so
+// colour codes from CLIs like opencode never reach the transcript as "[0m".
+func cleanText(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = cleanLine(l)
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
 // onRunMsg applies one worker message to the model.
 func (m Model) onRunMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	run := m.run
