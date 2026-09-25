@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // markdown renderers are cached per wrap-width (creating one is not free).
@@ -20,7 +21,7 @@ func mdRenderer(width int) *glamour.TermRenderer {
 		return r
 	}
 	r, err := glamour.NewTermRenderer(
-		glamour.WithStandardStyle("dark"),
+		glamour.WithStandardStyle(mdStyle()),
 		glamour.WithWordWrap(width),
 	)
 	if err != nil {
@@ -28,6 +29,14 @@ func mdRenderer(width int) *glamour.TermRenderer {
 	}
 	mdCache[width] = r
 	return r
+}
+
+// mdStyle picks glamour's light or dark theme to match the terminal.
+func mdStyle() string {
+	if lipgloss.HasDarkBackground() {
+		return "dark"
+	}
+	return "light"
 }
 
 // renderMarkdown renders agent replies as terminal markdown (dark theme, wrapped

@@ -176,6 +176,10 @@ func RunProbe(ctx context.Context, spec Spec) (string, Result, error) {
 	cmd.Stdout = w
 	cmd.Stderr = w
 	cmd.Env = append(os.Environ(), spec.Env...)
+	// The dashboard cancels runs: take the agent's children down with it, and
+	// don't wait long on pipes a stray grandchild may still hold open.
+	killTree(cmd)
+	cmd.WaitDelay = 2 * time.Second
 
 	start := time.Now()
 	err := cmd.Run()

@@ -5,6 +5,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRunProbeTeesToOutput(t *testing.T) {
@@ -25,5 +26,20 @@ func TestRunProbeTeesToOutput(t *testing.T) {
 		if !strings.Contains(s, "to-stdout") || !strings.Contains(s, "to-stderr") {
 			t.Fatalf("combined output missing a stream: %q", s)
 		}
+	}
+}
+
+// Cancelling must stop the agent's children too, and return promptly even
+// though a grandchild inherited the output pipe.
+func TestRunProbeCancelKillsChildren(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(200 * time.Millisecond); cancel() }()
+	start := time.Now()
+	_, _, err := RunProbe(ctx, Spec{Bin: "sh", Args: []string{"-c", "sleep 30; echo done"}, Dir: t.TempDir()})
+	if err != context.Canceled {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("cancel took %s", d)
 	}
 }
