@@ -12,10 +12,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// version is the build version. It defaults to the last released tag for
-// `go install`, and is overridden at release time via
-// -ldflags "-X main.version=<tag>" (see .goreleaser.yaml).
-var version = "0.8.0"
+// version is the build version, stamped at release time via
+// -ldflags "-X main.version=<tag>" (see .goreleaser.yaml). Local and
+// `go install` builds report "dev", which the self-updater never replaces.
+var version = "dev"
 
 // persistent flags shared across subcommands.
 var (
