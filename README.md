@@ -13,8 +13,9 @@
 Orchestra dispatches coding-agent CLIs (Claude Code, OpenCode, Mimo, …) through one **supervised**
 interface. You just chat: it **answers plain questions, routes coding tasks to the best agent**, validates
 every result (build → lint → test), lets the agent fix its own failures, and keeps nothing without your `y`.
-It can **decompose a big request into steps** — running independent ones **in parallel across isolated git
-worktrees** — remembers every run, and can **benchmark agents** against each other.
+It can **decompose a big request into steps** — running independent ones **in parallel, each isolated in
+its own git worktree (or folder copy outside a repo)** — remembers every run, and can **benchmark agents**
+against each other.
 
 ```sh
 # install (Linux/macOS) — prebuilt binary
@@ -90,8 +91,9 @@ orchestra do   "build user authentication"   # plan → approve → run each ste
 `do` commits each accepted step and **halts at the first rejected step** (prior steps stay committed).
 
 **Parallel** (`--parallel`): the planner marks which steps are independent; Orchestra runs each ready
-step concurrently in its own **git worktree**, then you review + merge each result before the next
-dependency wave unlocks:
+step concurrently in its own **git worktree** (or, in a folder that isn't a git repository, its own
+**temporary copy of the folder**), then you review + merge each result before the next dependency wave
+unlocks:
 
 ```sh
 orchestra do --parallel --jobs 4 "build the API, the CLI, and the docs"
@@ -101,6 +103,12 @@ Independent steps run at once; dependent steps wait for their prerequisites to m
 branch is merged into the base with **conflict detection** (a conflicting merge is left unmerged and its
 dependents are skipped); rejected branches are discarded. The base working tree is never touched during
 execution — all work happens in isolated worktrees.
+
+Outside a git repository the copies are made with the same ignore rules as snapshot diffs (dependency and
+build directories such as `node_modules`, `vendor`, `dist` are not copied), and an accepted step's files are
+written back only if none of them changed in your folder since the step started — otherwise the step is
+reported as a conflict and **nothing** of it is written. The check is per file: two steps editing the same
+file conflict even if they touched different lines. Copies are deleted when the run ends.
 
 ### Memory & history
 
@@ -143,7 +151,8 @@ Colors adapt to light and dark terminals.
 
 ### Benchmark agents
 
-Run the **same task through every agent** (each isolated in its own worktree, in parallel) and rank them:
+Run the **same task through every agent** (each isolated in its own worktree — or folder copy outside a
+git repository — in parallel) and rank them:
 
 ```sh
 orchestra benchmark "add input validation to the login form"
@@ -244,8 +253,8 @@ agents:
 ```
 
 > **`dir_flag`** tells Orchestra how to pass an agent its working directory. Most CLIs honor the process
-> cwd, but some (e.g. opencode) don't — set `dir_flag` so parallel worktrees stay isolated. Orchestra
-> also guards the base tree: if an agent writes outside its worktree anyway, the stray changes are
+> cwd, but some (e.g. opencode) don't — set `dir_flag` so parallel worktrees (and folder copies) stay
+> isolated. Orchestra also guards the base tree: if an agent writes outside its worktree anyway, the stray changes are
 > discarded before merge so one misbehaving agent can't break the wave.
 
 A config file overrides defaults and adds agents; matching names replace the built-in entry.
@@ -280,7 +289,7 @@ internal/tui         Bubble Tea dashboard: agents / history / benchmarks (read-o
 internal/router      AI routing: Classifier (CLI now, API later) → Decision, 3-tier fallback
 internal/planner     decompose a request into ordered steps (+ depends_on for parallel)
 internal/scheduler   bounded-concurrency runner + DAG waves (cycle/blocked detection)
-internal/worktree    git-worktree isolation: branch per task, merge + conflict detection
+internal/worktree    task isolation: git worktrees in a repo, folder copies elsewhere; merge + conflict detection
 internal/engine      supervised pipeline (dispatch → validate → retry → review) + headless mode  ← run/shell/do
 internal/shell       interactive chat REPL
 internal/memory      SQLite run history + preferred-agent hint (~/.orchestra)
