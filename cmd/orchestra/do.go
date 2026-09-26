@@ -12,6 +12,7 @@ import (
 	"github.com/crossben/orchestra-code/internal/agent"
 	"github.com/crossben/orchestra-code/internal/config"
 	"github.com/crossben/orchestra-code/internal/engine"
+	"github.com/crossben/orchestra-code/internal/fsdiff"
 	"github.com/crossben/orchestra-code/internal/gitutil"
 	"github.com/crossben/orchestra-code/internal/memory"
 	"github.com/crossben/orchestra-code/internal/planner"
@@ -36,8 +37,8 @@ func newDoCmd() *cobra.Command {
 		Short: "Plan a request, then execute each step supervised (sequential or parallel)",
 		Long: "Decompose a request into steps, let you approve the plan, then run each step through the\n" +
 			"supervised engine. Sequential by default (one step at a time, halt on rejection). With\n" +
-			"--parallel, independent steps run concurrently in isolated git worktrees and you review +\n" +
-			"merge each result.",
+			"--parallel, independent steps run concurrently in isolation (git worktrees inside a repository,\n" +
+			"directory copies in a plain folder) and you review + merge each result.",
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			request := strings.TrimSpace(strings.Join(args, " "))
@@ -56,12 +57,10 @@ func newDoCmd() *cobra.Command {
 				agentName = cfg.DefaultAgent
 			}
 
-			// Git pre-flight: sequential mode works anywhere (snapshot-tracked),
-			// but --parallel isolates steps in git worktrees, so it needs a repo.
+			// Git pre-flight: both modes work anywhere. Inside a repository the
+			// tree must start clean; --parallel isolates steps in git worktrees
+			// there, and in directory copies in a plain folder.
 			inRepo := gitutil.IsRepo(flagDir)
-			if parallel && !inRepo {
-				return fmt.Errorf("--parallel needs a git repository (each step runs in an isolated worktree); run inside a repo, or drop --parallel for step-by-step supervision")
-			}
 			if inRepo {
 				if clean, err := gitutil.IsClean(flagDir); err != nil {
 					return err
@@ -122,7 +121,7 @@ func newDoCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&agentName, "agent", "", "agent for planning and implementation (default from config)")
 	cmd.Flags().BoolVar(&yes, "yes", false, "skip the plan-approval prompt")
-	cmd.Flags().BoolVar(&parallel, "parallel", false, "run independent steps concurrently in isolated worktrees")
+	cmd.Flags().BoolVar(&parallel, "parallel", false, "run independent steps concurrently in isolated worktrees (or folder copies)")
 	cmd.Flags().IntVar(&jobs, "jobs", 4, "max concurrent steps when --parallel")
 	cmd.Flags().StringVar(&principles, "principles", "", "lean-code principles preamble: off|lite|full (default from config)")
 	return cmd
@@ -162,14 +161,16 @@ func runSequential(ctx context.Context, in *bufio.Reader, cfg *config.Config, re
 }
 
 // runParallel executes the plan in dependency waves: every step whose deps are
-// merged runs concurrently in its own worktree, then results are reviewed and
-// merged one at a time before the next wave unlocks.
+// merged runs concurrently in its own isolated tree (a git worktree, or a
+// directory copy outside a repository), then results are reviewed and merged
+// one at a time before the next wave unlocks.
 func runParallel(ctx context.Context, in *bufio.Reader, cfg *config.Config, reg *agent.Registry, ag agent.Agent, agentName string, pl planner.Plan, stages []validate.Stage, jobs int, mem *memory.Store) error {
-	mgr, err := worktree.NewManager(flagDir)
+	mgr, err := worktree.New(flagDir)
 	if err != nil {
 		return err
 	}
 	defer mgr.Cleanup()
+	guard := newBaseGuard(flagDir)
 
 	nodes := make([]scheduler.Node, len(pl.Steps))
 	for i, s := range pl.Steps {
@@ -201,6 +202,9 @@ func runParallel(ctx context.Context, in *bufio.Reader, cfg *config.Config, reg 
 			break
 		}
 		fmt.Printf("\n%s\n", ui.Heading(fmt.Sprintf("── wave %d: %d step(s) in parallel ──", wave, len(ready))))
+		if err := guard.arm(); err != nil {
+			return err
+		}
 
 		// Fan-out: run the ready steps concurrently, each in its own worktree.
 		results := make([]result, len(ready))
@@ -230,10 +234,7 @@ func runParallel(ctx context.Context, in *bufio.Reader, cfg *config.Config, reg 
 		// worktree (some CLIs don't honor the working directory), the base is now
 		// dirty and merges would fail. Discard that stray work so the properly
 		// isolated branches can still merge cleanly.
-		if clean, _ := gitutil.IsClean(flagDir); !clean {
-			fmt.Println(ui.Warn("  ! an agent wrote outside its worktree — discarding stray changes in the base tree"))
-			_ = gitutil.Restore(flagDir)
-		}
+		guard.check()
 
 		// Fan-in: review + merge each result in order.
 		for k, i := range ready {
@@ -342,4 +343,54 @@ func confirm(in *bufio.Reader, question string) bool {
 	default:
 		return false
 	}
+}
+
+// baseGuard catches agents that wrote into the base directory instead of their
+// isolated tree (some CLIs don't honor the working directory) and discards that
+// stray work. Inside a repository "stray" means the tree is no longer clean;
+// in a plain folder it means the folder differs from a snapshot armed before
+// the wave's fan-out.
+type baseGuard struct {
+	dir    string
+	inRepo bool
+	snap   *fsdiff.Snapshot
+}
+
+func newBaseGuard(dir string) *baseGuard {
+	return &baseGuard{dir: dir, inRepo: gitutil.IsRepo(dir)}
+}
+
+// arm records the base state before a wave runs (a no-op inside a repository,
+// where the clean tree is the reference).
+func (g *baseGuard) arm() error {
+	if g.inRepo {
+		return nil
+	}
+	snap, err := fsdiff.Capture(g.dir)
+	if err != nil {
+		return fmt.Errorf("snapshot %s: %w", g.dir, err)
+	}
+	g.snap = snap
+	return nil
+}
+
+// check discards any change made to the base since arm, reporting whether it did.
+func (g *baseGuard) check() bool {
+	if g.inRepo {
+		if clean, _ := gitutil.IsClean(g.dir); !clean {
+			fmt.Println(ui.Warn("  ! an agent wrote outside its worktree — discarding stray changes in the base tree"))
+			_ = gitutil.Restore(g.dir)
+			return true
+		}
+		return false
+	}
+	if g.snap == nil {
+		return false
+	}
+	if d, err := fsdiff.Diff(g.dir, g.snap); err != nil || d == "" {
+		return false
+	}
+	fmt.Println(ui.Warn("  ! an agent wrote outside its isolated copy — discarding stray changes in the base folder"))
+	_ = fsdiff.Restore(g.dir, g.snap)
+	return true
 }

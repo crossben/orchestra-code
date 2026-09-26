@@ -17,6 +17,7 @@ import (
 	"github.com/crossben/orchestra-code/internal/memory"
 	"github.com/crossben/orchestra-code/internal/scheduler"
 	"github.com/crossben/orchestra-code/internal/ui"
+	"github.com/crossben/orchestra-code/internal/validate"
 	"github.com/crossben/orchestra-code/internal/worktree"
 	"github.com/spf13/cobra"
 )
@@ -57,8 +58,8 @@ func newBenchmarkCmd() *cobra.Command {
 		Use:   `benchmark "<task>"`,
 		Short: "Run one task through every agent (isolated) and rank the results",
 		Long: "Run the same task from the same starting point through each available agent, each in its own\n" +
-			"git worktree, then print a leaderboard (validation, speed, retries, diff size). Offers to keep\n" +
-			"the winner. With --compare, runs each agent twice (principles off vs on) and reports how much\n" +
+			"isolated tree (a git worktree, or a directory copy in a plain folder), then print a leaderboard\n" +
+			"(validation, speed, retries, diff size). Offers to keep the winner. With --compare, runs each agent twice (principles off vs on) and reports how much\n" +
 			"smaller the lean-code principles make the diff.",
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -70,13 +71,14 @@ func newBenchmarkCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if !gitutil.IsRepo(flagDir) {
-				return fmt.Errorf("benchmark needs a git repository — every agent runs in an isolated worktree so their changes never collide")
-			}
-			if clean, err := gitutil.IsClean(flagDir); err != nil {
-				return err
-			} else if !clean {
-				return errDirty()
+			// Every agent runs isolated (git worktree in a repository, directory
+			// copy elsewhere); only a repository must start clean.
+			if gitutil.IsRepo(flagDir) {
+				if clean, err := gitutil.IsClean(flagDir); err != nil {
+					return err
+				} else if !clean {
+					return errDirty()
+				}
 			}
 
 			reg := cfg.BuildRegistry()
@@ -99,86 +101,7 @@ func newBenchmarkCmd() *cobra.Command {
 				jobs = len(agents)
 			}
 
-			stages := stagesFor(cfg)
-			retries := cfg.RetryLimit()
-
-			mgr, err := worktree.NewManager(flagDir)
-			if err != nil {
-				return err
-			}
-			defer mgr.Cleanup()
-
-			names := make([]string, len(agents))
-			for i, a := range agents {
-				names[i] = a.Name()
-			}
-			fmt.Printf("%s benchmarking %q across %s\n", ui.Accent("▸"), task, ui.Agent(strings.Join(names, ", ")))
-
-			// Run each agent in its own worktree, in parallel.
-			results := make([]benchResult, len(agents))
-			scheduler.Bounded(cmd.Context(), jobs, len(agents), func(i int) error {
-				a := agents[i]
-				results[i].agent = a.Name()
-				tree, aerr := mgr.Add("bench-"+a.Name(), "HEAD")
-				if aerr != nil {
-					results[i].err = aerr
-					return aerr
-				}
-				results[i].tree = tree
-				results[i].created = true
-
-				start := time.Now()
-				out, rerr := engine.ExecuteHeadless(cmd.Context(), engine.Options{
-					Agent:      a,
-					Prompt:     task,
-					Dir:        tree.Dir,
-					Stages:     stages,
-					MaxRetries: retries,
-					Timeout:    cfg.TimeoutDuration(),
-					Memory:     nil, // benchmark records to its own table, not run history
-					Label:      "bench:" + a.Name(),
-					Principles: config.PrinciplesText(cfg.Principles),
-				})
-				results[i].dur = time.Since(start)
-				results[i].out = out
-				results[i].err = rerr
-				if rerr == nil && out.HadChanges {
-					results[i].files, results[i].added, results[i].removed, _ = mgr.DiffStat(tree)
-				}
-				return rerr
-			})
-
-			ranked := rankResults(results)
-			printLeaderboard(ranked)
-
-			// Persist to memory (best-effort).
-			persistBenchmarks(cmd.Context(), task, ranked)
-
-			// Offer to keep the winner.
-			winner, ok := firstMergeable(ranked)
-			if !ok {
-				fmt.Println(ui.Dim("\nno agent produced a mergeable result — nothing to keep."))
-				return nil
-			}
-			in := bufio.NewReader(os.Stdin)
-			q := fmt.Sprintf("\nmerge winner %s into the base tree?", ui.Agent(winner.agent))
-			if !winner.valid() && !winner.skipped() {
-				q = fmt.Sprintf("\nwinner %s did NOT pass validation — merge it anyway?", ui.Agent(winner.agent))
-			}
-			if confirm(in, q) {
-				conflict, merr := mgr.Merge(winner.tree, "orchestra: benchmark winner ("+winner.agent+"): "+task)
-				if merr != nil {
-					return merr
-				}
-				if conflict {
-					fmt.Println(ui.Danger("✗ merge conflict — left unmerged"))
-				} else {
-					fmt.Println(ui.Success("✓ merged " + winner.agent + "'s result into the base tree"))
-				}
-			} else {
-				fmt.Println(ui.Dim("discarded — no changes kept."))
-			}
-			return nil
+			return runBenchmark(cmd.Context(), bufio.NewReader(os.Stdin), cfg, agents, task, jobs, stagesFor(cfg), persistBenchmarks)
 		},
 	}
 	cmd.Flags().StringVar(&only, "agents", "", "comma-separated agents to benchmark (default: all available)")
@@ -188,15 +111,101 @@ func newBenchmarkCmd() *cobra.Command {
 	return cmd
 }
 
+// runBenchmark runs task through every agent, each in its own isolated tree
+// (git worktree or directory copy), prints the leaderboard, hands the ranking
+// to persist (may be nil), and offers to merge the winner into flagDir.
+func runBenchmark(ctx context.Context, in *bufio.Reader, cfg *config.Config, agents []agent.Agent, task string, jobs int, stages []validate.Stage, persist func(context.Context, string, []benchResult)) error {
+	retries := cfg.RetryLimit()
+
+	mgr, err := worktree.New(flagDir)
+	if err != nil {
+		return err
+	}
+	defer mgr.Cleanup()
+
+	names := make([]string, len(agents))
+	for i, a := range agents {
+		names[i] = a.Name()
+	}
+	fmt.Printf("%s benchmarking %q across %s\n", ui.Accent("▸"), task, ui.Agent(strings.Join(names, ", ")))
+
+	// Run each agent in its own isolated tree, in parallel.
+	results := make([]benchResult, len(agents))
+	scheduler.Bounded(ctx, jobs, len(agents), func(i int) error {
+		a := agents[i]
+		results[i].agent = a.Name()
+		tree, aerr := mgr.Add("bench-"+a.Name(), "HEAD")
+		if aerr != nil {
+			results[i].err = aerr
+			return aerr
+		}
+		results[i].tree = tree
+		results[i].created = true
+
+		start := time.Now()
+		out, rerr := engine.ExecuteHeadless(ctx, engine.Options{
+			Agent:      a,
+			Prompt:     task,
+			Dir:        tree.Dir,
+			Stages:     stages,
+			MaxRetries: retries,
+			Timeout:    cfg.TimeoutDuration(),
+			Memory:     nil, // benchmark records to its own table, not run history
+			Label:      "bench:" + a.Name(),
+			Principles: config.PrinciplesText(cfg.Principles),
+		})
+		results[i].dur = time.Since(start)
+		results[i].out = out
+		results[i].err = rerr
+		if rerr == nil && out.HadChanges {
+			results[i].files, results[i].added, results[i].removed, _ = mgr.DiffStat(tree)
+		}
+		return rerr
+	})
+
+	ranked := rankResults(results)
+	printLeaderboard(ranked)
+
+	// Persist to memory (best-effort).
+	if persist != nil {
+		persist(ctx, task, ranked)
+	}
+
+	// Offer to keep the winner.
+	winner, ok := firstMergeable(ranked)
+	if !ok {
+		fmt.Println(ui.Dim("\nno agent produced a mergeable result — nothing to keep."))
+		return nil
+	}
+	q := fmt.Sprintf("\nmerge winner %s into the base tree?", ui.Agent(winner.agent))
+	if !winner.valid() && !winner.skipped() {
+		q = fmt.Sprintf("\nwinner %s did NOT pass validation — merge it anyway?", ui.Agent(winner.agent))
+	}
+	if confirm(in, q) {
+		conflict, merr := mgr.Merge(winner.tree, "orchestra: benchmark winner ("+winner.agent+"): "+task)
+		if merr != nil {
+			return merr
+		}
+		if conflict {
+			fmt.Println(ui.Danger("✗ merge conflict — left unmerged"))
+		} else {
+			fmt.Println(ui.Success("✓ merged " + winner.agent + "'s result into the base tree"))
+		}
+	} else {
+		fmt.Println(ui.Dim("discarded — no changes kept."))
+	}
+	return nil
+}
+
 // runCompare runs each agent twice — principles off vs `level` — and reports how
 // much smaller the lean-code principles make the resulting diff. Pure
-// measurement: all worktrees are discarded, nothing is merged.
+// measurement: all isolated trees are discarded, nothing is merged.
 func runCompare(ctx context.Context, cfg *config.Config, agents []agent.Agent, task, level string, jobs int) error {
 	onText := config.PrinciplesText(level)
 	if onText == "" {
 		return fmt.Errorf("--compare needs a non-off principles level (got %q)", level)
 	}
-	mgr, err := worktree.NewManager(flagDir)
+	mgr, err := worktree.New(flagDir)
 	if err != nil {
 		return err
 	}
