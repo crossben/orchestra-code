@@ -140,6 +140,25 @@ diff, validation badges, and the failing check's output if there is one. `[` / `
 shows all files, `↑↓` scrolls, then `y` accepts (commits in a git repo) or `n` rejects (reverts). With the
 AI router enabled, each message is routed to the best agent, and plain questions are answered inline.
 
+**Parallel runs.** Start a message with `/parallel` (or `/par`) to run it like `orchestra do --parallel`:
+
+```text
+/parallel add a login page, a signup page, and tests for both
+```
+
+The default agent plans the request into steps with dependencies, then each **wave** of independent steps
+runs concurrently (up to 4 at a time), every step in its own isolated tree — a git worktree inside a
+repository, a folder copy in a plain folder — so nothing touches your files yet. The run panel becomes a
+**task list**: one row per step with its status (queued, running, validating, retrying, done, failed),
+agent, attempt, elapsed time and last output line. `↑↓` / `j k` select a task, `enter` or `tab` expands
+its full output, `esc` collapses (and `esc` on the list cancels the run). When a wave finishes, every step
+that changed something opens in the same review screen, headed `wave i/N · task k/M`: `y` merges it into
+your folder, `n` discards it. A merge conflict with work already merged is reported and counts as a
+rejection; failed steps are shown with their error and skipped, and steps that depend on a rejected or
+failed one are skipped too. Then the next wave starts. `ctrl+c` mid-run cancels every task, removes every
+isolated tree and undoes any stray write into your folder before quitting. Each step is recorded in
+History like a single run.
+
 The other tabs:
 
 - **Changes**: every diff you accepted or rejected. Reopen any of them with `enter`, even after a restart.
@@ -312,6 +331,7 @@ internal/tui         Bubble Tea dashboard: agents / history / benchmarks (read-o
 internal/router      AI routing: Classifier (agent CLI or direct API) → Decision, tiered fallback
 internal/planner     decompose a request into ordered steps (+ depends_on for parallel)
 internal/scheduler   bounded-concurrency runner + DAG waves (cycle/blocked detection)
+internal/parallel    shared parallel workflow pieces (step graph, base-tree guard, quiet per-task run) ← do --parallel, dashboard /parallel
 internal/worktree    task isolation: git worktrees in a repo, folder copies elsewhere; merge + conflict detection
 internal/engine      supervised pipeline (dispatch → validate → retry → review) + headless mode  ← run/shell/do
 internal/shell       interactive chat REPL

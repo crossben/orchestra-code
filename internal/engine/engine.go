@@ -505,6 +505,10 @@ func outcomeLabel(out Outcome) string {
 	}
 }
 
+// CommitMessage is the one-line commit subject Orchestra uses for a task's
+// changes ("orchestra: <first line of the prompt>").
+func CommitMessage(prompt string) string { return commitMessage(prompt) }
+
 // commitMessage builds a one-line commit subject from the task prompt.
 func commitMessage(prompt string) string {
 	line := strings.TrimSpace(prompt)

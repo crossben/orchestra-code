@@ -7,8 +7,9 @@
 // round it out.
 //
 // Layout: tui.go (model, messages, key routing), chat.go (chat + transcript),
-// live.go (running a turn and the live run panel), review.go (diff review),
-// views.go (list tabs), chrome.go (header + status bar), theme.go, table.go.
+// live.go (running a turn and the live run panel), par.go (/parallel runs:
+// waves, task list, per-task review), review.go (diff review), views.go
+// (list tabs), chrome.go (header + status bar), theme.go, table.go.
 package tui
 
 import (
@@ -112,6 +113,7 @@ type Model struct {
 	cstate   chatState
 	messages []chatLine
 	run      *liveRun // current or last run (nil before the first)
+	par      *parRun  // current or last /parallel run (nil when the last run was a single one)
 	frame    int
 	rv       reviewer    // pending review (cstate == chatReviewing)
 	pending  engine.Turn // the turn under review
@@ -291,6 +293,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case routedMsg, eventMsg, outputMsg, turnMsg:
 		return m.onRunMsg(msg)
+	case parPlannedMsg, parEventMsg, parOutputMsg, parTaskDoneMsg, parWaveDoneMsg:
+		return m.onParMsg(msg)
 	case tea.KeyMsg:
 		return m.onKey(msg)
 	case tea.MouseMsg:
@@ -306,6 +310,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.par != nil {
+		switch {
+		case msg.String() == "ctrl+c" && !m.quitting && (m.par.phase == parPlanning || m.par.phase == parRunning):
+			// Cancel every task; the worker restores stray writes, then the
+			// model removes every isolated tree and quits.
+			m.quitting = true
+			m.cancelPar("")
+			m.setStatus("cancelling, cleaning up and reverting before quitting… (ctrl+c again to force)")
+			return m, nil
+		case msg.String() == "ctrl+c" && m.par.phase == parReviewing:
+			return m.quitPar()
+		case msg.String() == "tab" && m.active == tabChat && m.par.phase == parRunning:
+			return m.updateParRunning(msg) // tab expands the selected task
+		}
+	}
 	switch msg.String() {
 	case "ctrl+c":
 		// Mid-run, cancel first so the agent's partial edits are reverted,
@@ -396,6 +415,8 @@ func (m Model) onMouse(msg tea.MouseMsg) Model {
 	switch {
 	case m.browsing:
 		scroll(&m.browse.vp)
+	case m.active == tabChat && m.par != nil && m.par.expanded:
+		scroll(&m.par.out)
 	case m.active == tabChat && m.cstate == chatReviewing:
 		scroll(&m.rv.vp)
 	case m.active == tabChat:

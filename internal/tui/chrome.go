@@ -69,6 +69,10 @@ func (m Model) statusBar() string {
 	switch {
 	case m.status != "" && time.Since(m.statusAt) < 6*time.Second:
 		right = dimSty.Render(m.status)
+	case m.cstate == chatRunning && m.par != nil && m.par.phase == parRunning:
+		right = warnSty.Render(fmt.Sprintf("wave %d/%d · %s", m.par.wave, m.par.waves, fmtElapsed(time.Since(m.par.start))))
+	case m.cstate == chatRunning && m.par != nil:
+		right = warnSty.Render("planning · " + fmtElapsed(time.Since(m.par.start)))
 	case m.cstate == chatRunning && m.run != nil:
 		right = warnSty.Render(fmtElapsed(time.Since(m.run.start)))
 	case m.active == tabChat && m.cstate == chatIdle && !m.browsing && !m.vp.AtBottom():
@@ -92,6 +96,12 @@ func (m Model) hints() []string {
 	case tabChat:
 		switch m.cstate {
 		case chatRunning:
+			switch {
+			case m.par != nil && m.par.expanded:
+				return []string{"esc back", "↑↓ scroll", "shift+tab switch"}
+			case m.par != nil && m.par.phase == parRunning:
+				return []string{"↑↓ select", "enter expand", "esc cancel", "shift+tab switch"}
+			}
 			return []string{"esc cancel", "pgup/pgdn scroll", "tab switch"}
 		case chatReviewing:
 			return append(m.rv.hints(), "tab switch")
