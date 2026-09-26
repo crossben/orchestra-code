@@ -7,6 +7,7 @@ import (
 
 	"github.com/crossben/orchestra-code/internal/config"
 	"github.com/crossben/orchestra-code/internal/memory"
+	"github.com/crossben/orchestra-code/internal/router"
 	"github.com/crossben/orchestra-code/internal/ui"
 	"github.com/crossben/orchestra-code/internal/validate"
 )
@@ -29,6 +30,18 @@ func stagesFor(cfg *config.Config) []validate.Stage {
 // history is stable regardless of where orchestra is invoked from.
 func absDir() (string, error) {
 	return filepath.Abs(flagDir)
+}
+
+// The memory store is the router's track-record source.
+var _ router.History = (*memory.Store)(nil)
+
+// withHistory makes r history-aware when the memory store opened. A nil store
+// is skipped (not wrapped as a typed-nil interface), keeping routing as before.
+func withHistory(r *router.Router, mem *memory.Store) *router.Router {
+	if mem == nil {
+		return r
+	}
+	return r.WithHistory(mem)
 }
 
 // openMemory opens the shared memory store (~/.orchestra/orchestra.db).

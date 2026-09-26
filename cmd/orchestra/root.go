@@ -91,7 +91,7 @@ func runShell(cmd *cobra.Command) error {
 			fmt.Printf("(warning: AI routing disabled: %v)\n", rerr)
 			routingOn = false
 		} else {
-			rtr = r
+			rtr = withHistory(r, mem)
 		}
 	}
 

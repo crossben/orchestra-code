@@ -67,7 +67,9 @@ orchestra (claude) › /exit
 ```
 
 The **AI router** is on by default: plain questions are answered inline, coding tasks auto-route to the
-best agent (with a printed reason). Overrides: `@<name> <task>` forces an agent; `/route off` switches to
+best agent (with a printed reason). The agent is chosen by: the AI's own suggestion → the agent with the
+best track record in this directory (accepted runs + benchmark wins, once there are ≥3 outcomes; e.g.
+`claude: 8/10 accepted in this dir`) → `router.routes` → `default_agent`. Overrides: `@<name> <task>` forces an agent; `/route off` switches to
 a fixed active agent (`/agent <name>`). Shell commands: `/agents`, `/route [on|off]`, `/agent`, `/help`, `/exit`.
 Each accepted turn is committed, so the tree stays clean and every turn's diff shows only its own changes.
 

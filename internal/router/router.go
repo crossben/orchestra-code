@@ -6,8 +6,9 @@
 // an agent in query mode; APIClassifier calls a hosted LLM directly over HTTP.
 // Neither affects the resolution logic here.
 //
-// Resolution is three-tier and never blocks: AI suggestion → static routes →
-// default agent. Only healthy (installed) agents are chosen.
+// Resolution never blocks: AI suggestion → track record in this directory (when
+// a History is wired) → static routes → default agent → first healthy agent.
+// Only healthy (installed) agents are chosen.
 package router
 
 import (
@@ -50,6 +51,14 @@ type Classifier interface {
 	Classify(ctx context.Context, message, dir string) (Classification, error)
 }
 
+// History reports which agent has the best track record in a directory. The
+// router uses it as a tie-breaker when the AI makes no usable suggestion.
+// Implementations must only return one of candidates, and ok=false when the
+// data is too thin or tied. reason explains the pick for the user.
+type History interface {
+	BestAgent(dir string, candidates []string) (name, reason string, ok bool)
+}
+
 // Router combines a classifier with agent resolution and direct answering.
 type Router struct {
 	cls      Classifier
@@ -57,6 +66,13 @@ type Router struct {
 	reg      *agent.Registry   // to check agent availability
 	routes   map[string]string // intent → agent name (static fallback)
 	fallback string            // default agent
+	history  History           // optional track-record tie-breaker
+}
+
+// WithHistory enables history-aware resolution (nil disables it) and returns r.
+func (r *Router) WithHistory(h History) *Router {
+	r.history = h
+	return r
 }
 
 // New builds a Router.
@@ -72,10 +88,11 @@ func (r *Router) Classifier() Classifier { return r.cls }
 func (r *Router) Route(ctx context.Context, message, dir string) Decision {
 	c, err := r.cls.Classify(ctx, message, dir)
 	if err != nil {
+		name, why := r.resolve(IntentImplement, "", dir)
 		return Decision{
 			Intent: IntentImplement,
-			Agent:  r.resolve(IntentImplement, ""),
-			Reason: fmt.Sprintf("classification failed (%v); defaulting to implement", err),
+			Agent:  name,
+			Reason: joinReason(fmt.Sprintf("classification failed (%v); defaulting to implement", err), why),
 		}
 	}
 	if c.Intent == IntentQuestion {
@@ -84,10 +101,23 @@ func (r *Router) Route(ctx context.Context, message, dir string) Decision {
 	if !validIntent(c.Intent) {
 		c.Intent = IntentImplement
 	}
+	name, why := r.resolve(c.Intent, c.Agent, dir)
 	return Decision{
 		Intent: c.Intent,
-		Agent:  r.resolve(c.Intent, c.Agent),
-		Reason: c.Reason,
+		Agent:  name,
+		Reason: joinReason(c.Reason, why),
+	}
+}
+
+// joinReason appends a data-driven explanation to the classifier's reason.
+func joinReason(base, history string) string {
+	switch {
+	case history == "":
+		return base
+	case base == "":
+		return "history: " + history
+	default:
+		return base + " · history: " + history
 	}
 }
 
@@ -104,23 +134,42 @@ func (r *Router) Answer(ctx context.Context, message, dir string, timeout time.D
 	return r.answerer.Query(ctx, task)
 }
 
-// resolve applies the three-tier fallback, choosing only healthy agents.
-func (r *Router) resolve(intent Intent, suggested string) string {
+// resolve applies the tiered fallback, choosing only healthy agents. The second
+// return value explains a history-driven pick ("" otherwise).
+func (r *Router) resolve(intent Intent, suggested, dir string) (string, string) {
 	if r.healthy(suggested) {
-		return suggested
+		return suggested, ""
 	}
-	if a := r.routes[string(intent)]; r.healthy(a) {
-		return a
-	}
-	if r.healthy(r.fallback) {
-		return r.fallback
-	}
+	var healthy []string
 	for _, n := range r.reg.Names() {
 		if r.healthy(n) {
-			return n
+			healthy = append(healthy, n)
 		}
 	}
-	return r.fallback // nothing healthy; dispatch will surface a clear error
+	if r.history != nil && len(healthy) > 0 {
+		if name, why, ok := r.history.BestAgent(dir, healthy); ok && contains(healthy, name) {
+			return name, why
+		}
+	}
+	if a := r.routes[string(intent)]; r.healthy(a) {
+		return a, ""
+	}
+	if r.healthy(r.fallback) {
+		return r.fallback, ""
+	}
+	if len(healthy) > 0 {
+		return healthy[0], ""
+	}
+	return r.fallback, "" // nothing healthy; dispatch will surface a clear error
+}
+
+func contains(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Router) healthy(name string) bool {
