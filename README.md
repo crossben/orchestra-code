@@ -226,6 +226,14 @@ router:
     plan: claude
     implement: opencode
     review: claude
+  # Optional: classify with a cheap hosted model over HTTP instead of spawning the
+  # router agent's CLI. Used only when the key env var is set; otherwise Orchestra
+  # quietly falls back to `agent` above (which still answers plain questions).
+  # classifier:
+  #   provider: anthropic      # openai (default) | anthropic
+  #   model: claude-haiku-4-5
+  #   api_base: ""             # optional endpoint override
+  #   api_key_env: ""          # optional; defaults to ANTHROPIC_API_KEY / OPENAI_API_KEY
 
 agents:
   - name: claude
@@ -277,7 +285,7 @@ internal/llm         HTTP LLM providers (openai-compatible, anthropic) behind on
 internal/patch       extract changes from model replies and apply them safely
 internal/ui          terminal styling: gradient banner, spinners, colored diffs (TTY-aware)
 internal/tui         Bubble Tea dashboard: agents / history / benchmarks (read-only monitor)
-internal/router      AI routing: Classifier (CLI now, API later) → Decision, 3-tier fallback
+internal/router      AI routing: Classifier (agent CLI or direct API) → Decision, tiered fallback
 internal/planner     decompose a request into ordered steps (+ depends_on for parallel)
 internal/scheduler   bounded-concurrency runner + DAG waves (cycle/blocked detection)
 internal/worktree    git-worktree isolation: branch per task, merge + conflict detection

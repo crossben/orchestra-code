@@ -2,9 +2,9 @@
 // decides what to do with it — answer a plain question directly, or dispatch a
 // coding task to the best available agent.
 //
-// Classification is pluggable via the Classifier interface. M4 ships a CLI-based
-// classifier (an agent in query mode); a direct-API classifier can drop in later
-// without touching the resolution logic here.
+// Classification is pluggable via the Classifier interface: CLIClassifier asks
+// an agent in query mode; APIClassifier calls a hosted LLM directly over HTTP.
+// Neither affects the resolution logic here.
 //
 // Resolution is three-tier and never blocks: AI suggestion → static routes →
 // default agent. Only healthy (installed) agents are chosen.
@@ -63,6 +63,9 @@ type Router struct {
 func New(cls Classifier, answerer agent.Querier, reg *agent.Registry, routes map[string]string, fallback string) *Router {
 	return &Router{cls: cls, answerer: answerer, reg: reg, routes: routes, fallback: fallback}
 }
+
+// Classifier returns the classifier in use (useful for diagnostics and tests).
+func (r *Router) Classifier() Classifier { return r.cls }
 
 // Route classifies the message and resolves it to a Decision. Classification
 // failure is not fatal — it degrades to an implement task on the default agent.

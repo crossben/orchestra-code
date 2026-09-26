@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crossben/orchestra-code/internal/agent"
+	"github.com/crossben/orchestra-code/internal/llm"
 	"github.com/crossben/orchestra-code/internal/router"
 	"github.com/crossben/orchestra-code/internal/validate"
 	"gopkg.in/yaml.v3"
@@ -53,6 +54,19 @@ type RouterConfig struct {
 	Enabled *bool             `yaml:"enabled"` // pointer so "false" differs from unset
 	Agent   string            `yaml:"agent"`   // agent that does classification/answers
 	Routes  map[string]string `yaml:"routes"`  // intent → agent name (static fallback)
+
+	// Classifier optionally classifies via a hosted LLM directly (no CLI spawn).
+	// Used only when Model is set and the key env var is non-empty; otherwise
+	// the router agent classifies. The router agent still answers questions.
+	Classifier ClassifierConfig `yaml:"classifier"`
+}
+
+// ClassifierConfig configures the direct-API router classifier.
+type ClassifierConfig struct {
+	Provider  string `yaml:"provider"`    // openai (default) | anthropic
+	Model     string `yaml:"model"`       // required to enable the API classifier
+	APIBase   string `yaml:"api_base"`    // optional endpoint override
+	APIKeyEnv string `yaml:"api_key_env"` // env var holding the key (provider default)
 }
 
 // Config is the top-level Orchestra configuration.
@@ -300,6 +314,18 @@ func merge(base, user *Config) {
 		}
 		base.Router.Routes[intent] = ag
 	}
+	if uc := user.Router.Classifier; uc.Provider != "" {
+		base.Router.Classifier.Provider = uc.Provider
+	}
+	if uc := user.Router.Classifier; uc.Model != "" {
+		base.Router.Classifier.Model = uc.Model
+	}
+	if uc := user.Router.Classifier; uc.APIBase != "" {
+		base.Router.Classifier.APIBase = uc.APIBase
+	}
+	if uc := user.Router.Classifier; uc.APIKeyEnv != "" {
+		base.Router.Classifier.APIKeyEnv = uc.APIKeyEnv
+	}
 	if user.Timeout != "" {
 		base.Timeout = user.Timeout
 	}
@@ -319,8 +345,8 @@ func merge(base, user *Config) {
 }
 
 // BuildRouter constructs the AI router from config against a registry. The
-// router (CLI classifier) uses the configured router agent for classification
-// and direct answers.
+// configured router agent answers plain questions; classification uses the
+// direct-API classifier when router.classifier is usable, else the router agent.
 func (c *Config) BuildRouter(reg *agent.Registry) (*router.Router, error) {
 	ra, ok := reg.Get(c.RouterAgent())
 	if !ok {
@@ -330,11 +356,44 @@ func (c *Config) BuildRouter(reg *agent.Registry) (*router.Router, error) {
 	if !ok {
 		return nil, fmt.Errorf("router agent %q cannot answer questions (no query support)", c.RouterAgent())
 	}
-	cls, err := router.NewCLIClassifier(ra, reg.Names(), c.TimeoutDuration())
-	if err != nil {
-		return nil, err
+	var cls router.Classifier
+	if api := c.apiClassifier(reg.Names()); api != nil {
+		cls = api
+	} else {
+		cli, err := router.NewCLIClassifier(ra, reg.Names(), c.TimeoutDuration())
+		if err != nil {
+			return nil, err
+		}
+		cls = cli
 	}
 	return router.New(cls, answerer, reg, c.Router.Routes, c.DefaultAgent), nil
+}
+
+// apiClassifier returns the direct-API classifier, or nil when it is not
+// configured (no model), has no key in the environment, or names an unusable
+// provider. Nil means "fall back to the CLI classifier" — never a startup error.
+func (c *Config) apiClassifier(choices []string) *router.APIClassifier {
+	cc := c.Router.Classifier
+	if strings.TrimSpace(cc.Model) == "" {
+		return nil
+	}
+	provider := cc.Provider
+	if provider == "" {
+		provider = "openai"
+	}
+	keyEnv := cc.APIKeyEnv
+	if keyEnv == "" {
+		keyEnv = llm.DefaultKeyEnv(provider)
+	}
+	key := os.Getenv(keyEnv)
+	if key == "" {
+		return nil
+	}
+	prov, err := llm.New(provider, cc.APIBase, key, cc.Model, nil)
+	if err != nil {
+		return nil
+	}
+	return router.NewAPIClassifier(prov, choices, router.DefaultClassifierTimeout)
 }
 
 // BuildRegistry turns the config's agents into a live agent.Registry. Agents
