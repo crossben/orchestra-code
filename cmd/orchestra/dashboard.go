@@ -43,7 +43,7 @@ func newDashboardCmd() *cobra.Command {
 					fmt.Printf("(note: AI routing off in chat: %v)\n", rerr)
 					routingOn = false
 				} else {
-					rtr = r
+					rtr = withHistory(r, mem)
 				}
 			}
 
