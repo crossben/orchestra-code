@@ -61,6 +61,24 @@ func FormatTokens(n int) string {
 	}
 }
 
+// TokensCell is the compact table cell for stored usage: "12.3k/1.1k" (in/out),
+// or "—" when nothing was reported (stored zero = unknown).
+func TokensCell(in, out int) string {
+	if in == 0 && out == 0 {
+		return "—"
+	}
+	return FormatTokens(in) + "/" + FormatTokens(out)
+}
+
+// CostCell is the compact table cell for a stored cost, "—" when not priced
+// (stored zero).
+func CostCell(usd float64) string {
+	if usd <= 0 {
+		return "—"
+	}
+	return FormatCost(usd)
+}
+
 // FormatCost renders USD with cents, or four decimals below one cent so a
 // cheap run does not read as free.
 func FormatCost(usd float64) string {

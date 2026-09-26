@@ -34,6 +34,12 @@ type Run struct {
 	Attempts int
 	Passed   bool   // validation passed
 	Diff     string // unified diff the run produced ("" when none or not recorded)
+
+	// Token usage summed over every attempt. Zero tokens = unknown (CLI
+	// agents); zero cost = not priced.
+	TokensIn  int
+	TokensOut int
+	CostUSD   float64
 }
 
 // DefaultPath returns ~/.orchestra/orchestra.db.
@@ -97,14 +103,32 @@ CREATE INDEX IF NOT EXISTS idx_bench_dir ON benchmarks(dir);`)
 	if err != nil {
 		return err
 	}
-	// Added after the first release: databases created earlier lack the diff
-	// column. SQLite has no ADD COLUMN IF NOT EXISTS, so check first.
-	has, err := s.hasColumn("runs", "diff")
-	if err != nil || has {
-		return err
+	// Columns added after the first release. Databases created earlier lack
+	// them; SQLite has no ADD COLUMN IF NOT EXISTS, so check each first.
+	for _, c := range addedColumns {
+		has, err := s.hasColumn(c.table, c.name)
+		if err != nil {
+			return err
+		}
+		if has {
+			continue
+		}
+		if _, err := s.db.Exec(`ALTER TABLE ` + c.table + ` ADD COLUMN ` + c.name + ` ` + c.def); err != nil {
+			return fmt.Errorf("add column %s.%s: %w", c.table, c.name, err)
+		}
 	}
-	_, err = s.db.Exec(`ALTER TABLE runs ADD COLUMN diff TEXT NOT NULL DEFAULT ''`)
-	return err
+	return nil
+}
+
+// addedColumns are applied idempotently, in order, on every Open.
+var addedColumns = []struct{ table, name, def string }{
+	{"runs", "diff", `TEXT NOT NULL DEFAULT ''`},
+	{"runs", "tokens_in", `INTEGER NOT NULL DEFAULT 0`},
+	{"runs", "tokens_out", `INTEGER NOT NULL DEFAULT 0`},
+	{"runs", "cost_usd", `REAL NOT NULL DEFAULT 0`},
+	{"benchmarks", "tokens_in", `INTEGER NOT NULL DEFAULT 0`},
+	{"benchmarks", "tokens_out", `INTEGER NOT NULL DEFAULT 0`},
+	{"benchmarks", "cost_usd", `REAL NOT NULL DEFAULT 0`},
 }
 
 // hasColumn reports whether table has a column named col.
@@ -141,6 +165,10 @@ type BenchRun struct {
 	Removed  int
 	Exit     int
 	Won      bool
+
+	TokensIn  int
+	TokensOut int
+	CostUSD   float64
 }
 
 // RecordBenchmark stores one agent's benchmark result.
@@ -152,11 +180,11 @@ func (s *Store) RecordBenchmark(r BenchRun, now time.Time) error {
 		return 0
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO benchmarks (ts, dir, task, agent, valid, skipped, changed, duration_ms, retries, files, added, removed, exit, won)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO benchmarks (ts, dir, task, agent, valid, skipped, changed, duration_ms, retries, files, added, removed, exit, won, tokens_in, tokens_out, cost_usd)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		now.UTC().Format(time.RFC3339), r.Dir, r.Task, r.Agent,
 		b(r.Valid), b(r.Skipped), b(r.Changed), r.Duration.Milliseconds(), r.Retries,
-		r.Files, r.Added, r.Removed, r.Exit, b(r.Won),
+		r.Files, r.Added, r.Removed, r.Exit, b(r.Won), r.TokensIn, r.TokensOut, r.CostUSD,
 	)
 	return err
 }
@@ -168,8 +196,10 @@ func (s *Store) Record(r Run, now time.Time) error {
 		passed = 1
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO runs (ts, dir, agent, prompt, outcome, attempts, passed, diff) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO runs (ts, dir, agent, prompt, outcome, attempts, passed, diff, tokens_in, tokens_out, cost_usd)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		now.UTC().Format(time.RFC3339), r.Dir, r.Agent, r.Prompt, r.Outcome, r.Attempts, passed, r.Diff,
+		r.TokensIn, r.TokensOut, r.CostUSD,
 	)
 	return err
 }
@@ -180,10 +210,11 @@ func (s *Store) Recent(dir string, limit int) ([]Run, error) {
 		rows *sql.Rows
 		err  error
 	)
+	const cols = `id, ts, dir, agent, prompt, outcome, attempts, passed, diff, tokens_in, tokens_out, cost_usd`
 	if dir == "" {
-		rows, err = s.db.Query(`SELECT id, ts, dir, agent, prompt, outcome, attempts, passed, diff FROM runs ORDER BY id DESC LIMIT ?`, limit)
+		rows, err = s.db.Query(`SELECT `+cols+` FROM runs ORDER BY id DESC LIMIT ?`, limit)
 	} else {
-		rows, err = s.db.Query(`SELECT id, ts, dir, agent, prompt, outcome, attempts, passed, diff FROM runs WHERE dir = ? ORDER BY id DESC LIMIT ?`, dir, limit)
+		rows, err = s.db.Query(`SELECT `+cols+` FROM runs WHERE dir = ? ORDER BY id DESC LIMIT ?`, dir, limit)
 	}
 	if err != nil {
 		return nil, err
@@ -195,7 +226,8 @@ func (s *Store) Recent(dir string, limit int) ([]Run, error) {
 		var r Run
 		var ts string
 		var passed int
-		if err := rows.Scan(&r.ID, &ts, &r.Dir, &r.Agent, &r.Prompt, &r.Outcome, &r.Attempts, &passed, &r.Diff); err != nil {
+		if err := rows.Scan(&r.ID, &ts, &r.Dir, &r.Agent, &r.Prompt, &r.Outcome, &r.Attempts, &passed, &r.Diff,
+			&r.TokensIn, &r.TokensOut, &r.CostUSD); err != nil {
 			return nil, err
 		}
 		r.Time, _ = time.Parse(time.RFC3339, ts)
@@ -229,12 +261,18 @@ type AgentStats struct {
 	Runs     int
 	Accepted int
 	LastUsed time.Time
+
+	// Usage totals across the agent's runs (zero when never reported/priced).
+	TokensIn  int
+	TokensOut int
+	CostUSD   float64
 }
 
-// StatsByAgent returns per-agent run counts, accepted counts and last-used time
-// for dir (all dirs if "").
+// StatsByAgent returns per-agent run counts, accepted counts, last-used time
+// and token/cost totals for dir (all dirs if "").
 func (s *Store) StatsByAgent(dir string) (map[string]AgentStats, error) {
-	const q = `SELECT agent, COUNT(*), SUM(outcome = 'accepted'), MAX(ts) FROM runs`
+	const q = `SELECT agent, COUNT(*), SUM(outcome = 'accepted'), MAX(ts),
+	    SUM(tokens_in), SUM(tokens_out), SUM(cost_usd) FROM runs`
 	var (
 		rows *sql.Rows
 		err  error
@@ -255,7 +293,7 @@ func (s *Store) StatsByAgent(dir string) (map[string]AgentStats, error) {
 			st   AgentStats
 			ts   string
 		)
-		if err := rows.Scan(&name, &st.Runs, &st.Accepted, &ts); err != nil {
+		if err := rows.Scan(&name, &st.Runs, &st.Accepted, &ts, &st.TokensIn, &st.TokensOut, &st.CostUSD); err != nil {
 			return nil, err
 		}
 		st.LastUsed, _ = time.Parse(time.RFC3339, ts)
@@ -276,6 +314,10 @@ type BenchRow struct {
 	Files    int
 	Added    int
 	Removed  int
+
+	TokensIn  int
+	TokensOut int
+	CostUSD   float64
 }
 
 // RecentBenchmarks returns recent benchmark rows for dir (all dirs if "").
@@ -284,7 +326,7 @@ func (s *Store) RecentBenchmarks(dir string, limit int) ([]BenchRow, error) {
 		rows *sql.Rows
 		err  error
 	)
-	const cols = `ts, task, agent, valid, won, duration_ms, retries, files, added, removed`
+	const cols = `ts, task, agent, valid, won, duration_ms, retries, files, added, removed, tokens_in, tokens_out, cost_usd`
 	if dir == "" {
 		rows, err = s.db.Query(`SELECT `+cols+` FROM benchmarks ORDER BY id DESC LIMIT ?`, limit)
 	} else {
@@ -304,7 +346,8 @@ func (s *Store) RecentBenchmarks(dir string, limit int) ([]BenchRow, error) {
 			won        int
 			durationMs int64
 		)
-		if err := rows.Scan(&ts, &r.Task, &r.Agent, &valid, &won, &durationMs, &r.Retries, &r.Files, &r.Added, &r.Removed); err != nil {
+		if err := rows.Scan(&ts, &r.Task, &r.Agent, &valid, &won, &durationMs, &r.Retries, &r.Files, &r.Added, &r.Removed,
+			&r.TokensIn, &r.TokensOut, &r.CostUSD); err != nil {
 			return nil, err
 		}
 		r.Time, _ = time.Parse(time.RFC3339, ts)

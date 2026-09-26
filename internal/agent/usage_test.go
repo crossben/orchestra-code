@@ -63,6 +63,18 @@ func TestFormatTokensAndCost(t *testing.T) {
 	}
 }
 
+func TestTableCells(t *testing.T) {
+	if TokensCell(0, 0) != "—" || CostCell(0) != "—" {
+		t.Fatal("unknown usage should render as —")
+	}
+	if got := TokensCell(12_345, 1_100); got != "12.3k/1.1k" {
+		t.Fatalf("TokensCell = %q", got)
+	}
+	if got := CostCell(0.042); got != "$0.04" {
+		t.Fatalf("CostCell = %q", got)
+	}
+}
+
 // usageProvider is a fake llm.Provider that reports token usage.
 type usageProvider struct {
 	fakeProvider
