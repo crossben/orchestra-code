@@ -12,7 +12,9 @@ package fsdiff
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -36,7 +38,8 @@ var ErrTooLarge = errors.New("directory too large to snapshot (>128 MiB of file 
 type File struct {
 	Mode     os.FileMode
 	Content  []byte
-	Withheld bool // too large to capture; treated as opaque
+	Withheld bool     // too large to capture; treated as opaque
+	Sum      [32]byte // SHA-256 of a withheld file, so unchanged ones don't diff
 }
 
 // Snapshot is the captured state of a directory. Keys are slash-separated,
@@ -135,7 +138,11 @@ func Capture(dir string) (*Snapshot, error) {
 			return nil
 		}
 		if info.Size() > MaxFileBytes {
-			snap.Files[rel] = &File{Mode: info.Mode().Perm(), Withheld: true}
+			f := &File{Mode: info.Mode().Perm(), Withheld: true}
+			if sum, herr := hashFile(p); herr == nil {
+				f.Sum = sum
+			}
+			snap.Files[rel] = f
 			return nil
 		}
 		data, rerr := os.ReadFile(p)
@@ -163,4 +170,20 @@ func looksBinary(data []byte) bool {
 		n = 800
 	}
 	return bytes.IndexByte(data[:n], 0) >= 0
+}
+
+// hashFile streams a file through SHA-256 without holding it in memory.
+func hashFile(path string) ([32]byte, error) {
+	var sum [32]byte
+	f, err := os.Open(path)
+	if err != nil {
+		return sum, err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return sum, err
+	}
+	copy(sum[:], h.Sum(nil))
+	return sum, nil
 }

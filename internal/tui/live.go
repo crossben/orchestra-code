@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/crossben/orchestra-code/internal/agent"
 	"github.com/crossben/orchestra-code/internal/engine"
 	"github.com/crossben/orchestra-code/internal/gitutil"
 )
@@ -47,6 +48,7 @@ type liveRun struct {
 	agentDone bool
 	exitCode  int
 	agentDur  time.Duration
+	usage     agent.Usage // summed over finished attempts (unknown for CLI agents)
 	stages    []stageState
 	past      []string // one summary line per finished attempt
 	lines     []string // agent output tail
@@ -163,6 +165,9 @@ type lineWriter struct {
 	mu      sync.Mutex
 	ch      chan tea.Msg
 	partial string
+	// tag, if set, wraps each batch of lines (parallel runs tag them with the
+	// task id); nil sends a plain outputMsg.
+	tag func(lines []string) tea.Msg
 }
 
 func (w *lineWriter) Write(p []byte) (int, error) {
@@ -193,8 +198,12 @@ func (w *lineWriter) emit(raw []string) {
 	for _, l := range raw {
 		lines = append(lines, cleanLine(l))
 	}
+	var msg tea.Msg = outputMsg{lines: lines}
+	if w.tag != nil {
+		msg = w.tag(lines)
+	}
 	select {
-	case w.ch <- outputMsg{lines: lines}:
+	case w.ch <- msg:
 	default:
 	}
 }
@@ -208,6 +217,16 @@ func cleanLine(s string) string {
 	}
 	s = strings.TrimRight(s, "\r")
 	return strings.ReplaceAll(s, "\t", "    ")
+}
+
+// cleanText applies cleanLine to every line of an agent's captured output, so
+// colour codes from CLIs like opencode never reach the transcript as "[0m".
+func cleanText(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = cleanLine(l)
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
 // onRunMsg applies one worker message to the model.
@@ -263,6 +282,7 @@ func (m *Model) applyEvent(e engine.Event) {
 	case engine.EventAgentDone:
 		run.agentDone = true
 		run.exitCode, run.agentDur = e.ExitCode, e.Duration
+		run.usage = run.usage.Add(e.Usage)
 	case engine.EventStageStart, engine.EventStageDone:
 		state := stRunning
 		if e.Kind == engine.EventStageDone {
@@ -367,6 +387,10 @@ func (m Model) runPanel(w, h int) string {
 		} else if run.agentDone {
 			head = append(head, "  "+warnSty.Render("no checks configured — unverified"))
 		}
+	}
+
+	if u := run.usage.String(); u != "" {
+		head = append(head, dimSty.Render("∑ "+u))
 	}
 
 	// Output tail fills the rest.

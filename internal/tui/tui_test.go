@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/crossben/orchestra-code/internal/agent"
 	"github.com/crossben/orchestra-code/internal/config"
@@ -522,5 +523,119 @@ func TestCtrlCDuringRunRevertsThenQuits(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "half.txt")); !os.IsNotExist(err) {
 		t.Fatal("partial change should be reverted before quitting")
+	}
+}
+
+// opencode colours its output; the escape codes must not leak into the chat
+// transcript as literal "[0m" (glamour drops ESC but keeps the rest).
+func TestAgentReplyColourCodesStripped(t *testing.T) {
+	m := testModel()
+	m.cstate = chatRunning
+	m.run = &liveRun{task: "hello", start: time.Now(), agent: "opencode"}
+	nm, _ := m.onTurn(turnMsg{turn: engine.Turn{AgentText: "\x1b[0m\n\x1b[1m│ build · big-pickle \x1b[0m Hello!\r\n"}, agent: "opencode", started: true})
+	// Real escape sequences are fine (styling); leftover "[0m" text is not.
+	v := ansi.Strip(nm.(Model).View())
+	if strings.Contains(v, "[0m") || strings.Contains(v, "[1m") {
+		t.Fatalf("colour codes leaked into the transcript:\n%s", v)
+	}
+	if !strings.Contains(v, "Hello!") {
+		t.Fatalf("reply text missing:\n%s", v)
+	}
+}
+
+// A long system note wraps with its continuation lines indented too.
+func TestSysLineWrapKeepsIndent(t *testing.T) {
+	out := sysLine("↳ routed to opencode — classification failed (exec: \"claude\": executable file not found in $PATH); defaulting to implement", 60)
+	for i, l := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(l, "  ") {
+			t.Fatalf("line %d not indented: %q", i, l)
+		}
+	}
+}
+
+// longAnswer puts a many-screen reply in the transcript, scrolled to the end.
+func longAnswer(t *testing.T) Model {
+	t.Helper()
+	m := testModelIn(".", nil, nil, 120, 30)
+	m.messages = []chatLine{{role: "you", text: "explain"}}
+	m.cstate = chatRunning
+	m.run = &liveRun{task: "explain", start: time.Now()}
+	var b strings.Builder
+	b.WriteString("FIRSTLINE of the answer\n\n")
+	for i := 0; i < 80; i++ {
+		b.WriteString("a paragraph of the explanation\n\n")
+	}
+	nm, _ := m.onTurn(turnMsg{turn: engine.Turn{AgentText: b.String()}, answered: true})
+	m = nm.(Model)
+	if m.vp.AtTop() || strings.Contains(m.View(), "FIRSTLINE") {
+		t.Fatal("a long answer should open scrolled to its end")
+	}
+	return m
+}
+
+func TestLongAnswerScrollsToTopWithArrows(t *testing.T) {
+	m := longAnswer(t)
+	for i := 0; i < 400 && !m.vp.AtTop(); i++ {
+		m = press(m, "up")
+	}
+	if !strings.Contains(m.View(), "FIRSTLINE") {
+		t.Fatal("↑ with an empty input should scroll back to the start")
+	}
+	if !strings.Contains(m.View(), "scrolled") {
+		t.Fatal("status bar should say the transcript is scrolled")
+	}
+	// With text typed, arrows belong to the input again.
+	m = press(m, "hi")
+	before := m.vp.YOffset
+	m = press(m, "down")
+	if m.vp.YOffset != before {
+		t.Fatal("arrows should not scroll while there is text in the input")
+	}
+}
+
+func TestLongAnswerScrollsWithMouseWheel(t *testing.T) {
+	m := longAnswer(t)
+	wheel := func(m Model, b tea.MouseButton) Model {
+		nm, _ := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: b})
+		return nm.(Model)
+	}
+	for i := 0; i < 200 && !m.vp.AtTop(); i++ {
+		m = wheel(m, tea.MouseButtonWheelUp)
+	}
+	if !strings.Contains(m.View(), "FIRSTLINE") {
+		t.Fatal("wheel up should scroll back to the start")
+	}
+	m = wheel(m, tea.MouseButtonWheelDown)
+	if m.vp.YOffset != wheelLines {
+		t.Fatalf("wheel down should scroll %d lines, offset=%d", wheelLines, m.vp.YOffset)
+	}
+	// In History the wheel moves the selection.
+	h := m.switchTab(tabHistory)
+	h.runs = []memory.Run{{Agent: "a", Prompt: "one"}, {Agent: "a", Prompt: "two"}}
+	h.reload()
+	if h = wheel(h, tea.MouseButtonWheelDown); h.histSel != 1 {
+		t.Fatalf("wheel should move the History selection, sel=%d", h.histSel)
+	}
+}
+
+// In any window, however small, a frame must fit exactly: taller frames make
+// the terminal scroll on every redraw and stack copies of the screen.
+func TestTinyWindowNeverOverflows(t *testing.T) {
+	for _, size := range [][2]int{{80, 2}, {80, 5}, {40, 20}, {59, 11}, {20, 3}, {1, 1}} {
+		m := testModelIn(".", nil, nil, size[0], size[1])
+		for tb := tab(0); tb < numTabs; tb++ {
+			lines := strings.Split(m.switchTab(tb).View(), "\n")
+			if len(lines) > size[1] {
+				t.Fatalf("%dx%d tab %s: %d lines", size[0], size[1], tabNames[tb], len(lines))
+			}
+			for _, l := range lines {
+				if lipgloss.Width(l) > size[0] {
+					t.Fatalf("%dx%d tab %s: line wider than window: %q", size[0], size[1], tabNames[tb], l)
+				}
+			}
+		}
+	}
+	if v := testModelIn(".", nil, nil, 80, 8).View(); !strings.Contains(v, "at least") {
+		t.Fatalf("small window should explain the minimum size:\n%s", v)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/crossben/orchestra-code/internal/agent"
 	"github.com/crossben/orchestra-code/internal/engine"
 	"github.com/crossben/orchestra-code/internal/memory"
 	"github.com/crossben/orchestra-code/internal/ui"
@@ -28,7 +29,12 @@ func (m Model) mainWidth() int {
 	return m.width
 }
 
-func (m Model) stackedPanelHeight() int { return min(14, m.bodyHeight()/2) }
+func (m Model) stackedPanelHeight() int {
+	if m.par != nil {
+		return m.parStackedHeight()
+	}
+	return min(14, m.bodyHeight()/2)
+}
 
 // layout sizes the transcript, input and any open reviewer to the window.
 func (m *Model) layout() {
@@ -47,6 +53,10 @@ func (m *Model) layout() {
 	if m.browsing {
 		m.browse.setSize(m.width, bodyH)
 	}
+	if m.par != nil {
+		m.par.out.Width = max(m.width-4, 10) // border + padding
+		m.par.out.Height = max(bodyH-3, 3)   // title line + border
+	}
 }
 
 // setChatContent refreshes the transcript viewport, keeping it pinned to the
@@ -61,14 +71,23 @@ func (m Model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case chatReviewing:
 		switch msg.String() {
 		case "y", "Y":
+			if m.par != nil && m.par.phase == parReviewing {
+				return m.parAccept()
+			}
 			return m.accept()
 		case "n", "N":
+			if m.par != nil && m.par.phase == parReviewing {
+				return m.parReject()
+			}
 			return m.reject()
 		}
 		var cmd tea.Cmd
 		m.rv, cmd, _ = m.rv.update(msg)
 		return m, cmd
 	case chatRunning:
+		if m.par != nil {
+			return m.updateParRunning(msg)
+		}
 		switch msg.String() {
 		case "esc":
 			if m.run != nil && !m.run.cancelled {
@@ -89,6 +108,14 @@ func (m Model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "enter":
 		return m.submitChat()
+	case "up", "down":
+		// With nothing typed, the arrows scroll the conversation; once there is
+		// text they move the cursor in the input as usual.
+		if strings.TrimSpace(m.ta.Value()) == "" {
+			var cmd tea.Cmd
+			m.vp, cmd = m.vp.Update(msg)
+			return m, cmd
+		}
 	case "pgup", "pgdown":
 		var cmd tea.Cmd
 		m.vp, cmd = m.vp.Update(msg)
@@ -107,13 +134,27 @@ func (m Model) submitChat() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.ta.Reset()
+	request, isPar := parPrefix(text)
+	if isPar && request == "" {
+		m.messages = append(m.messages, chatLine{role: "sys",
+			text: "usage: /parallel <request> (or /par) — plans the request, runs independent steps in parallel, then you review each one"})
+		m.setChatContent()
+		return m, nil
+	}
 	m.ta.Blur()
 	m.messages = append(m.messages, chatLine{role: "you", text: text})
 	m.cstate = chatRunning
 	m.frame = 0
 	m.status = ""
-	cmd := m.startRun(text)
-	m.logEvent("info", "task: "+firstLine(text))
+	var cmd tea.Cmd
+	if isPar {
+		cmd = m.startPar(request)
+		m.logEvent("info", "parallel: "+firstLine(request))
+	} else {
+		m.par = nil
+		cmd = m.startRun(text)
+		m.logEvent("info", "task: "+firstLine(text))
+	}
 	m.layout()
 	m.setChatContent()
 	return m, cmd
@@ -138,7 +179,7 @@ func (m Model) onTurn(msg turnMsg) (tea.Model, tea.Cmd) {
 			} else {
 				text = "↺ cancelled — any changes were reverted"
 			}
-			m.record(memory.Run{Agent: agentName, Prompt: run.task, Outcome: "cancelled", Attempts: t.Attempts})
+			m.record(usageRun(memory.Run{Agent: agentName, Prompt: run.task, Outcome: "cancelled", Attempts: t.Attempts}, t.Usage))
 		}
 		m.messages = append(m.messages, chatLine{role: "sys", text: text})
 		m.logEvent("turn", "run cancelled")
@@ -147,22 +188,22 @@ func (m Model) onTurn(msg turnMsg) (tea.Model, tea.Cmd) {
 		m.messages = append(m.messages, chatLine{role: "sys", text: "✗ " + t.Err.Error()})
 		m.logEvent("error", t.Err.Error())
 		if msg.started {
-			m.record(memory.Run{Agent: agentName, Prompt: run.task, Outcome: "failed", Attempts: t.Attempts})
+			m.record(usageRun(memory.Run{Agent: agentName, Prompt: run.task, Outcome: "failed", Attempts: t.Attempts}, t.Usage))
 		}
 	case msg.answered:
 		run.result = "answered"
 		run.agent = ""
-		m.messages = append(m.messages, chatLine{role: "agent", text: strings.TrimSpace(t.AgentText), agent: "orchestra"})
+		m.messages = append(m.messages, chatLine{role: "agent", text: cleanText(t.AgentText), agent: "orchestra"})
 		m.logEvent("turn", "question answered")
-		ui.Notify("Orchestra", "Answered — "+firstLine(t.AgentText))
+		ui.Notify("Orchestra", "Answered — "+firstLine(cleanText(t.AgentText)))
 	case !t.HadChanges:
 		run.result = "no changes"
-		resp := strings.TrimSpace(t.AgentText)
+		resp := cleanText(t.AgentText)
 		if resp == "" {
 			resp = "(the agent made no file changes)"
 		}
 		m.messages = append(m.messages, chatLine{role: "agent", text: resp, agent: agentName})
-		m.record(memory.Run{Agent: agentName, Prompt: run.task, Outcome: "no-change", Attempts: t.Attempts, Passed: t.Report.Passed()})
+		m.record(usageRun(memory.Run{Agent: agentName, Prompt: run.task, Outcome: "no-change", Attempts: t.Attempts, Passed: t.Report.Passed()}, t.Usage))
 		m.logEvent("turn", fmt.Sprintf("%s replied without changes", agentName))
 		ui.Notify("Orchestra", "Agent finished — "+firstLine(resp))
 	default:
@@ -214,10 +255,10 @@ func (m Model) reject() (tea.Model, tea.Cmd) {
 
 func (m Model) finishReview(outcome string) Model {
 	t := m.pending
-	m.record(memory.Run{
+	m.record(usageRun(memory.Run{
 		Agent: m.pendAg, Prompt: m.pendTask, Outcome: outcome,
 		Attempts: t.Attempts, Passed: t.Report.Passed(), Diff: t.Diff,
-	})
+	}, t.Usage))
 	m.logEvent("turn", outcome)
 	m.cstate = chatIdle
 	m.pending = engine.Turn{}
@@ -229,6 +270,12 @@ func (m Model) finishReview(outcome string) Model {
 	return m
 }
 
+// usageRun stamps a run's summed token usage onto its history record.
+func usageRun(r memory.Run, u agent.Usage) memory.Run {
+	r.TokensIn, r.TokensOut, r.CostUSD = u.InputTokens, u.OutputTokens, u.CostUSD
+	return r
+}
+
 // --- rendering ---
 
 func (m Model) chatView() string {
@@ -237,11 +284,19 @@ func (m Model) chatView() string {
 	}
 	bodyH := m.bodyHeight()
 	mw := m.mainWidth()
+	if m.cstate == chatRunning && m.par != nil && m.par.expanded && len(m.par.tasks) > 0 {
+		return m.parExpandedView()
+	}
 
 	var bottom string
 	switch {
+	case m.cstate == chatRunning && !m.wide() && m.par != nil:
+		bottom = m.parPanel(mw, m.stackedPanelHeight())
 	case m.cstate == chatRunning && !m.wide():
 		bottom = m.runPanel(mw, m.stackedPanelHeight())
+	case m.cstate == chatRunning && m.par != nil:
+		bottom = panelBox("", warnSty.Render(spin(m.frame))+dimSty.Render(" agents are working in parallel — ↑↓ select · enter expands · esc cancels"),
+			mw, inputHeight, faint)
 	case m.cstate == chatRunning:
 		bottom = panelBox("", warnSty.Render(spin(m.frame))+dimSty.Render(" the agent is working — follow along on the right · esc cancels"),
 			mw, inputHeight, faint)
@@ -254,7 +309,9 @@ func (m Model) chatView() string {
 		return main
 	}
 	var side string
-	if m.run != nil {
+	if m.par != nil {
+		side = m.parPanel(m.sideWidth(), bodyH)
+	} else if m.run != nil {
 		side = m.runPanel(m.sideWidth(), bodyH)
 	} else {
 		side = m.sessionCard(m.sideWidth(), bodyH)
@@ -302,7 +359,8 @@ func sysLine(text string, w int) string {
 	case strings.HasPrefix(text, "↺"), strings.HasPrefix(text, "●"):
 		st = warnSty
 	}
-	return lipgloss.NewStyle().Width(w).Render("  " + st.Render(text))
+	// Padding (not a literal indent) keeps wrapped lines aligned under the first.
+	return lipgloss.NewStyle().Width(w).PaddingLeft(2).Render(st.Render(text))
 }
 
 func (m Model) welcome() string {
@@ -313,6 +371,7 @@ func (m Model) welcome() string {
 		dimSty.Render("the checks run, and nothing is kept until you accept the diff."),
 		"",
 		keySty.Render("try  ") + "add a /health endpoint with a test",
+		keySty.Render("     ") + "/parallel add login and signup" + dimSty.Render("  (steps run side by side)"),
 	}
 	if m.d.RoutingOn && m.d.Router != nil {
 		lines = append(lines, keySty.Render("     ")+"why is the build slow?"+dimSty.Render("  (questions get answers)"))

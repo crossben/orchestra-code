@@ -69,8 +69,14 @@ func (m Model) statusBar() string {
 	switch {
 	case m.status != "" && time.Since(m.statusAt) < 6*time.Second:
 		right = dimSty.Render(m.status)
+	case m.cstate == chatRunning && m.par != nil && m.par.phase == parRunning:
+		right = warnSty.Render(fmt.Sprintf("wave %d/%d · %s", m.par.wave, m.par.waves, fmtElapsed(time.Since(m.par.start))))
+	case m.cstate == chatRunning && m.par != nil:
+		right = warnSty.Render("planning · " + fmtElapsed(time.Since(m.par.start)))
 	case m.cstate == chatRunning && m.run != nil:
 		right = warnSty.Render(fmtElapsed(time.Since(m.run.start)))
+	case m.active == tabChat && m.cstate == chatIdle && !m.browsing && !m.vp.AtBottom():
+		right = dimSty.Render(fmt.Sprintf("scrolled · %d%%", int(m.vp.ScrollPercent()*100)))
 	}
 
 	left := mode + " " + hints
@@ -90,11 +96,17 @@ func (m Model) hints() []string {
 	case tabChat:
 		switch m.cstate {
 		case chatRunning:
+			switch {
+			case m.par != nil && m.par.expanded:
+				return []string{"esc back", "↑↓ scroll", "shift+tab switch"}
+			case m.par != nil && m.par.phase == parRunning:
+				return []string{"↑↓ select", "enter expand", "esc cancel", "shift+tab switch"}
+			}
 			return []string{"esc cancel", "pgup/pgdn scroll", "tab switch"}
 		case chatReviewing:
 			return append(m.rv.hints(), "tab switch")
 		}
-		return []string{"enter send", "ctrl+j newline", "pgup/pgdn scroll", "tab switch", "ctrl+c quit"}
+		return []string{"enter send", "ctrl+j newline", "↑↓/wheel scroll", "tab switch", "ctrl+c quit"}
 	case tabChanges, tabHistory:
 		return []string{"↑↓ select", "enter open", "r refresh", "tab switch", "q quit"}
 	case tabAgents:
@@ -136,6 +148,15 @@ func padLines(s string, n, w int) string {
 		lines = append(lines, "")
 	}
 	return strings.Join(lines, "\n")
+}
+
+// tooSmall fills tiny windows with a resize hint, never exceeding them.
+func (m Model) tooSmall() string {
+	w, h := max(m.width, 1), max(m.height, 1)
+	msg := titleSty.Render("⬡ ORCHESTRA") + "\n" +
+		dimSty.Render(fmt.Sprintf("window is %d×%d — make it at least %d×%d", m.width, m.height, minWidth, minHeight)) + "\n" +
+		dimSty.Render("ctrl+c quits")
+	return padLines(lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, msg), h, w)
 }
 
 // emptyState is a centred hint box for tabs with nothing to show yet.

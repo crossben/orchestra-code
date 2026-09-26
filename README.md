@@ -13,8 +13,9 @@
 Orchestra dispatches coding-agent CLIs (Claude Code, OpenCode, Mimo, …) through one **supervised**
 interface. You just chat: it **answers plain questions, routes coding tasks to the best agent**, validates
 every result (build → lint → test), lets the agent fix its own failures, and keeps nothing without your `y`.
-It can **decompose a big request into steps** — running independent ones **in parallel across isolated git
-worktrees** — remembers every run, and can **benchmark agents** against each other.
+It can **decompose a big request into steps** — running independent ones **in parallel, each isolated in
+its own git worktree (or folder copy outside a repo)** — remembers every run, and can **benchmark agents**
+against each other.
 
 ```sh
 # install (Linux/macOS) — prebuilt binary
@@ -67,7 +68,9 @@ orchestra (claude) › /exit
 ```
 
 The **AI router** is on by default: plain questions are answered inline, coding tasks auto-route to the
-best agent (with a printed reason). Overrides: `@<name> <task>` forces an agent; `/route off` switches to
+best agent (with a printed reason). The agent is chosen by: the AI's own suggestion → the agent with the
+best track record in this directory (accepted runs + benchmark wins, once there are ≥3 outcomes; e.g.
+`claude: 8/10 accepted in this dir`) → `router.routes` → `default_agent`. Overrides: `@<name> <task>` forces an agent; `/route off` switches to
 a fixed active agent (`/agent <name>`). Shell commands: `/agents`, `/route [on|off]`, `/agent`, `/help`, `/exit`.
 Each accepted turn is committed, so the tree stays clean and every turn's diff shows only its own changes.
 
@@ -90,8 +93,9 @@ orchestra do   "build user authentication"   # plan → approve → run each ste
 `do` commits each accepted step and **halts at the first rejected step** (prior steps stay committed).
 
 **Parallel** (`--parallel`): the planner marks which steps are independent; Orchestra runs each ready
-step concurrently in its own **git worktree**, then you review + merge each result before the next
-dependency wave unlocks:
+step concurrently in its own **git worktree** (or, in a folder that isn't a git repository, its own
+**temporary copy of the folder**), then you review + merge each result before the next dependency wave
+unlocks:
 
 ```sh
 orchestra do --parallel --jobs 4 "build the API, the CLI, and the docs"
@@ -101,6 +105,12 @@ Independent steps run at once; dependent steps wait for their prerequisites to m
 branch is merged into the base with **conflict detection** (a conflicting merge is left unmerged and its
 dependents are skipped); rejected branches are discarded. The base working tree is never touched during
 execution — all work happens in isolated worktrees.
+
+Outside a git repository the copies are made with the same ignore rules as snapshot diffs (dependency and
+build directories such as `node_modules`, `vendor`, `dist` are not copied), and an accepted step's files are
+written back only if none of them changed in your folder since the step started — otherwise the step is
+reported as a conflict and **nothing** of it is written. The check is per file: two steps editing the same
+file conflict even if they touched different lines. Copies are deleted when the run ends.
 
 ### Memory & history
 
@@ -130,6 +140,25 @@ diff, validation badges, and the failing check's output if there is one. `[` / `
 shows all files, `↑↓` scrolls, then `y` accepts (commits in a git repo) or `n` rejects (reverts). With the
 AI router enabled, each message is routed to the best agent, and plain questions are answered inline.
 
+**Parallel runs.** Start a message with `/parallel` (or `/par`) to run it like `orchestra do --parallel`:
+
+```text
+/parallel add a login page, a signup page, and tests for both
+```
+
+The default agent plans the request into steps with dependencies, then each **wave** of independent steps
+runs concurrently (up to 4 at a time), every step in its own isolated tree — a git worktree inside a
+repository, a folder copy in a plain folder — so nothing touches your files yet. The run panel becomes a
+**task list**: one row per step with its status (queued, running, validating, retrying, done, failed),
+agent, attempt, elapsed time and last output line. `↑↓` / `j k` select a task, `enter` or `tab` expands
+its full output, `esc` collapses (and `esc` on the list cancels the run). When a wave finishes, every step
+that changed something opens in the same review screen, headed `wave i/N · task k/M`: `y` merges it into
+your folder, `n` discards it. A merge conflict with work already merged is reported and counts as a
+rejection; failed steps are shown with their error and skipped, and steps that depend on a rejected or
+failed one are skipped too. Then the next wave starts. `ctrl+c` mid-run cancels every task, removes every
+isolated tree and undoes any stray write into your folder before quitting. Each step is recorded in
+History like a single run.
+
 The other tabs:
 
 - **Changes**: every diff you accepted or rejected. Reopen any of them with `enter`, even after a restart.
@@ -143,7 +172,8 @@ Colors adapt to light and dark terminals.
 
 ### Benchmark agents
 
-Run the **same task through every agent** (each isolated in its own worktree, in parallel) and rank them:
+Run the **same task through every agent** (each isolated in its own worktree — or folder copy outside a
+git repository — in parallel) and rank them:
 
 ```sh
 orchestra benchmark "add input validation to the login form"
@@ -198,6 +228,18 @@ go build -o bin/orchestra ./cmd/orchestra
 ./bin/orchestra init            # write a starter orchestra.yaml
 ```
 
+## Updating
+
+Release builds check GitHub for a newer version at most once a day when started in an interactive
+terminal, and ask `Download and install now? [Y/n]`. On yes, Orchestra downloads the archive for your
+platform, verifies its SHA-256 against the release's `checksums.txt`, replaces its own executable, and
+exits — relaunch to use the new version. Run `orchestra update` to check on demand (`--check` to only
+report, `-y` to skip the prompt).
+
+The check never runs in pipes, scripts or CI (`CI` set), for dev/snapshot builds, or when
+`ORCHESTRA_NO_UPDATE_CHECK=1`. Installed via Homebrew/Scoop or into a directory you can't write to?
+Update the same way you installed instead.
+
 ## Configuration
 
 Orchestra works with no config (built-in defaults for the common agents). To customize, `orchestra init`
@@ -226,6 +268,14 @@ router:
     plan: claude
     implement: opencode
     review: claude
+  # Optional: classify with a cheap hosted model over HTTP instead of spawning the
+  # router agent's CLI. Used only when the key env var is set; otherwise Orchestra
+  # quietly falls back to `agent` above (which still answers plain questions).
+  # classifier:
+  #   provider: anthropic      # openai (default) | anthropic
+  #   model: claude-haiku-4-5
+  #   api_base: ""             # optional endpoint override
+  #   api_key_env: ""          # optional; defaults to ANTHROPIC_API_KEY / OPENAI_API_KEY
 
 agents:
   - name: claude
@@ -244,8 +294,8 @@ agents:
 ```
 
 > **`dir_flag`** tells Orchestra how to pass an agent its working directory. Most CLIs honor the process
-> cwd, but some (e.g. opencode) don't — set `dir_flag` so parallel worktrees stay isolated. Orchestra
-> also guards the base tree: if an agent writes outside its worktree anyway, the stray changes are
+> cwd, but some (e.g. opencode) don't — set `dir_flag` so parallel worktrees (and folder copies) stay
+> isolated. Orchestra also guards the base tree: if an agent writes outside its worktree anyway, the stray changes are
 > discarded before merge so one misbehaving agent can't break the wave.
 
 A config file overrides defaults and adds agents; matching names replace the built-in entry.
@@ -263,6 +313,7 @@ A config file overrides defaults and adds agents; matching names replace the bui
 | `orchestra history` | recent runs + preferred agent                      |
 | `orchestra agents`  | list agents; `--probe` live-tests each can actually run |
 | `orchestra init`    | write a starter `orchestra.yaml`                   |
+| `orchestra update`  | install the latest release; `--check` only reports, `-y` skips the prompt |
 
 `run` flags: `--agent`, `--test`, `--retries`, `--timeout`, `--force`. `do`: `--agent`, `--yes`, `--parallel`, `--jobs`. Global: `--dir`.
 
@@ -277,10 +328,11 @@ internal/llm         HTTP LLM providers (openai-compatible, anthropic) behind on
 internal/patch       extract changes from model replies and apply them safely
 internal/ui          terminal styling: gradient banner, spinners, colored diffs (TTY-aware)
 internal/tui         Bubble Tea dashboard: agents / history / benchmarks (read-only monitor)
-internal/router      AI routing: Classifier (CLI now, API later) → Decision, 3-tier fallback
+internal/router      AI routing: Classifier (agent CLI or direct API) → Decision, tiered fallback
 internal/planner     decompose a request into ordered steps (+ depends_on for parallel)
 internal/scheduler   bounded-concurrency runner + DAG waves (cycle/blocked detection)
-internal/worktree    git-worktree isolation: branch per task, merge + conflict detection
+internal/parallel    shared parallel workflow pieces (step graph, base-tree guard, quiet per-task run) ← do --parallel, dashboard /parallel
+internal/worktree    task isolation: git worktrees in a repo, folder copies elsewhere; merge + conflict detection
 internal/engine      supervised pipeline (dispatch → validate → retry → review) + headless mode  ← run/shell/do
 internal/shell       interactive chat REPL
 internal/memory      SQLite run history + preferred-agent hint (~/.orchestra)

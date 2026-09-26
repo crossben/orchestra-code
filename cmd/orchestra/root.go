@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/crossben/orchestra-code/internal/config"
 	"github.com/crossben/orchestra-code/internal/gitutil"
@@ -11,10 +12,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// version is the build version. It defaults to the last released tag for
-// `go install`, and is overridden at release time via
-// -ldflags "-X main.version=<tag>" (see .goreleaser.yaml).
-var version = "0.8.0"
+// version is the build version, stamped at release time via
+// -ldflags "-X main.version=<tag>" (see .goreleaser.yaml). Local and
+// `go install` builds report "dev", which the self-updater never replaces.
+var version = "dev"
 
 // persistent flags shared across subcommands.
 var (
@@ -29,6 +30,12 @@ func newRootCmd() *cobra.Command {
 		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		// Before any command: offer a newer release when running interactively.
+		// Never fails — update problems must not block the requested command.
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			launchCheck(cmd, realUpdateEnv(), newUpdater(), os.Exit)
+			return nil
+		},
 		// No subcommand → start the interactive shell.
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runShell(cmd)
@@ -45,6 +52,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newHistoryCmd())
 	root.AddCommand(newBenchmarkCmd())
 	root.AddCommand(newDashboardCmd())
+	root.AddCommand(newUpdateCmd())
 	return root
 }
 
@@ -91,7 +99,7 @@ func runShell(cmd *cobra.Command) error {
 			fmt.Printf("(warning: AI routing disabled: %v)\n", rerr)
 			routingOn = false
 		} else {
-			rtr = r
+			rtr = withHistory(r, mem)
 		}
 	}
 

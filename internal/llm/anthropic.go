@@ -38,7 +38,11 @@ type anthropicResponse struct {
 		Text string `json:"text"`
 	} `json:"content"`
 	StopReason string `json:"stop_reason"`
-	Error      *struct {
+	Usage      struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+	} `json:"usage"`
+	Error *struct {
 		Message string `json:"message"`
 		Type    string `json:"type"`
 	} `json:"error"`
@@ -83,5 +87,9 @@ func (a *Anthropic) Complete(ctx context.Context, req Request) (Response, error)
 			b.WriteString(c.Text)
 		}
 	}
-	return Response{Text: b.String(), StopReason: out.StopReason}, nil
+	return Response{
+		Text:       b.String(),
+		StopReason: out.StopReason,
+		Usage:      Usage{InputTokens: out.Usage.InputTokens, OutputTokens: out.Usage.OutputTokens},
+	}, nil
 }

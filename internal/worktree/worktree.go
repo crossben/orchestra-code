@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // Tree is one isolated worktree.
@@ -29,6 +30,10 @@ type Manager struct {
 	repo  string // base repository directory
 	root  string // temp dir holding the worktrees
 	trees []Tree // everything created, so Cleanup can reap leftovers
+
+	// mu serialises Add and Cleanup: do --parallel creates trees from several
+	// goroutines, and concurrent `git worktree add` also contends on git's locks.
+	mu sync.Mutex
 }
 
 // NewManager prepares a worktree root for the given repo.
@@ -47,6 +52,8 @@ func NewManager(repo string) (*Manager, error) {
 // Add creates a worktree branched from fromRef (e.g. "HEAD"). The branch is
 // named orchestra/<id>.
 func (m *Manager) Add(id, fromRef string) (Tree, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	branch := "orchestra/" + id
 	dir := filepath.Join(m.root, id)
 	if _, err := m.git(m.repo, "worktree", "add", "-b", branch, dir, fromRef); err != nil {
@@ -120,6 +127,8 @@ func (m *Manager) Remove(t Tree) error {
 // prunes git's records. Safe to call after a partial/interrupted run — any
 // worktree not already Removed is torn down here, so nothing leaks.
 func (m *Manager) Cleanup() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for _, t := range m.trees {
 		_, _ = m.git(m.repo, "worktree", "remove", "--force", t.Dir)
 		_, _ = m.git(m.repo, "branch", "-D", t.Branch)

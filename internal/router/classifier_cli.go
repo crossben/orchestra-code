@@ -30,7 +30,9 @@ func NewCLIClassifier(a agent.Agent, choices []string, timeout time.Duration) (*
 	return &CLIClassifier{agent: q, name: a.Name(), choices: choices, timeout: timeout}, nil
 }
 
-const classifyTemplate = `You are the router for a coding assistant. Classify the user's message and respond with ONLY a JSON object — no prose, no markdown fences:
+// classifyContract is the output contract shared by every classifier. %s is the
+// comma-separated list of agent names the classifier may suggest.
+const classifyContract = `You are the router for a coding assistant. Classify the user's message and respond with ONLY a JSON object — no prose, no markdown fences:
 {"intent": "question|plan|implement|review", "agent": "<one of: %s — or empty>", "reason": "<short justification>"}
 
 Definitions:
@@ -38,9 +40,10 @@ Definitions:
 - "plan": the user wants a large task broken into steps.
 - "implement": the user wants code written or modified.
 - "review": the user wants existing code reviewed or critiqued.
-Set "agent" only if one is clearly most suitable; otherwise leave it empty.
+Set "agent" only if one is clearly most suitable; otherwise leave it empty.`
 
-User message: %s`
+// classifyTemplate is the single-prompt form used by the CLI classifier.
+const classifyTemplate = classifyContract + "\n\nUser message: %s"
 
 // Classify queries the agent and parses its JSON verdict. It uses a quiet query
 // (stdout only, stderr discarded) so classification never prints stray output —

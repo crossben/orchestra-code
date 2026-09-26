@@ -1,6 +1,7 @@
 package worktree
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -120,4 +121,30 @@ func indexOf(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+// do --parallel creates trees from several goroutines at once.
+func TestAddConcurrent(t *testing.T) {
+	repo := initRepo(t)
+	m, err := NewManager(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Cleanup()
+	const n = 6
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			_, err := m.Add(fmt.Sprintf("c%d", i), "HEAD")
+			errs <- err
+		}(i)
+	}
+	for i := 0; i < n; i++ {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(m.trees) != n {
+		t.Fatalf("want %d tracked trees, got %d", n, len(m.trees))
+	}
 }

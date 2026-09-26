@@ -277,3 +277,37 @@ func TestLineEditsReconstructB(t *testing.T) {
 		}
 	}
 }
+
+func TestDiffOversizedFileUnchangedIsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "big.log"), strings.Repeat("a", MaxFileBytes+1))
+	before, err := Capture(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := Diff(dir, before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "" {
+		t.Fatalf("unchanged oversized file must not diff, got:\n%s", out)
+	}
+}
+
+func TestDiffOversizedFileChangedIsOpaque(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "big.log")
+	writeFile(t, path, strings.Repeat("a", MaxFileBytes+1))
+	before, err := Capture(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, path, strings.Repeat("a", MaxFileBytes)+"b")
+	out, err := Diff(dir, before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "Binary files a/big.log and b/big.log differ") {
+		t.Fatalf("changed oversized file should diff as opaque, got:\n%s", out)
+	}
+}

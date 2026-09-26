@@ -29,6 +29,8 @@ type APIAgent struct {
 	prov   llm.Provider
 	caps   []Capability
 	budget int
+
+	priceIn, priceOut float64 // USD per million tokens (0 = not priced)
 }
 
 // Compile-time proof that APIAgent satisfies the whole contract surface, so
@@ -66,6 +68,16 @@ func NewAPI(name, provider, model, apiBase, keyEnv string, caps []Capability, bu
 	}
 	return &APIAgent{name: name, model: model, keyEnv: keyEnv, prov: prov, caps: copied, budget: budget}, nil
 }
+
+// SetPricing sets the USD prices per million input/output tokens used to
+// cost each run. Both must be > 0 for a cost to be computed; otherwise runs
+// still report tokens but no cost.
+func (a *APIAgent) SetPricing(inPerMTok, outPerMTok float64) {
+	a.priceIn, a.priceOut = inPerMTok, outPerMTok
+}
+
+// Pricing returns the configured USD prices per million input/output tokens.
+func (a *APIAgent) Pricing() (inPerMTok, outPerMTok float64) { return a.priceIn, a.priceOut }
 
 // Name implements Agent.
 func (a *APIAgent) Name() string { return a.name }
@@ -116,14 +128,16 @@ func (a *APIAgent) Run(ctx context.Context, task Task) (Result, error) {
 	}
 	// There is no token stream, so progress is one line out and one line back.
 	progress(task.Output, "→ asking %s (%s) · %d KiB of repo context", a.model, a.prov.Name(), len(snap)>>10)
-	text, err := a.complete(ctx, outputContract, snap+"\n\n=== TASK ===\n"+task.Prompt, task.Timeout)
+	resp, err := a.complete(ctx, outputContract, snap+"\n\n=== TASK ===\n"+task.Prompt, task.Timeout)
 	if err != nil {
 		return Result{}, err
 	}
+	text, usage := resp.Text, a.usage(resp.Usage)
 	p, _ := patch.Extract(text)
 	if !p.Empty() {
 		if err := patch.Apply(ctx, task.Dir, p); err != nil {
-			return Result{Duration: time.Since(start)}, fmt.Errorf("apply model changes: %w", err)
+			// The tokens were spent even though the patch failed.
+			return Result{Duration: time.Since(start), Usage: usage}, fmt.Errorf("apply model changes: %w", err)
 		}
 		progress(task.Output, "← applied %d diff(s) and %d file write(s) in %s", len(p.Diffs), len(p.Files), time.Since(start).Round(time.Second/10))
 	} else {
@@ -131,7 +145,17 @@ func (a *APIAgent) Run(ctx context.Context, task Task) (Result, error) {
 	}
 	// Output carries the model's raw text so the engine's no-change/question
 	// detection (package engine) sees exactly what the model said.
-	return Result{ExitCode: 0, Duration: time.Since(start), Output: text}, nil
+	return Result{ExitCode: 0, Duration: time.Since(start), Output: text, Usage: usage}, nil
+}
+
+// usage converts a provider's token counts into a (possibly priced) Usage.
+// A reply without counts stays unknown rather than reading as free.
+func (a *APIAgent) usage(u llm.Usage) Usage {
+	if u.InputTokens == 0 && u.OutputTokens == 0 {
+		return Usage{}
+	}
+	cost, priced := Cost(u.InputTokens, u.OutputTokens, a.priceIn, a.priceOut)
+	return Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CostUSD: cost, Known: true, Priced: priced}
 }
 
 // progress writes one line to w when it is set.
@@ -149,7 +173,8 @@ func (a *APIAgent) RunQuiet(ctx context.Context, task Task) (Result, error) {
 // Query implements Querier: a plain completion with no patch contract and no
 // repo snapshot — used by the router (classification/answers) and planner.
 func (a *APIAgent) Query(ctx context.Context, task Task) (string, error) {
-	return a.complete(ctx, "", task.Prompt, task.Timeout)
+	resp, err := a.complete(ctx, "", task.Prompt, task.Timeout)
+	return resp.Text, err
 }
 
 // QueryQuiet implements QuietQuerier; identical to Query (never streams).
@@ -162,7 +187,8 @@ const probeContract = "Reply with exactly the word OK and nothing else. Do not c
 // Probe implements Prober: a trivial live completion that catches auth,
 // billing, and connectivity problems a Health check cannot see.
 func (a *APIAgent) Probe(ctx context.Context, timeout time.Duration) ProbeResult {
-	text, err := a.complete(ctx, probeContract, probeContract, timeout)
+	resp, err := a.complete(ctx, probeContract, probeContract, timeout)
+	text := resp.Text
 	switch {
 	case err != nil:
 		detail := firstMeaningfulLine(err.Error())
@@ -179,19 +205,15 @@ func (a *APIAgent) Probe(ctx context.Context, timeout time.Duration) ProbeResult
 }
 
 // complete issues one provider call. system may be empty (plain query mode).
-func (a *APIAgent) complete(ctx context.Context, system, user string, timeout time.Duration) (string, error) {
+func (a *APIAgent) complete(ctx context.Context, system, user string, timeout time.Duration) (llm.Response, error) {
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	resp, err := a.prov.Complete(ctx, llm.Request{
+	return a.prov.Complete(ctx, llm.Request{
 		System:      system,
 		Messages:    []llm.Message{{Role: "user", Content: user}},
 		Temperature: 0,
 	})
-	if err != nil {
-		return "", err
-	}
-	return resp.Text, nil
 }

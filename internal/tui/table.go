@@ -8,9 +8,12 @@ import (
 )
 
 // col is one table column: a fixed width (0 = take the remaining space).
+// drop > 0 marks a column that may be hidden when the window is too narrow;
+// the highest drop goes first.
 type col struct {
 	title string
 	width int
+	drop  int
 }
 
 // fit pads or truncates s to exactly w terminal cells. Widths are measured on
@@ -27,12 +30,16 @@ func fit(s string, w int) string {
 }
 
 // table lays out rows of pre-styled cells under a header, sized to width.
-// The one zero-width column absorbs whatever space the others leave.
+// The one zero-width column absorbs whatever space the others leave;
+// droppable columns are hidden, highest drop first, until it keeps minFlex.
 type table struct {
 	cols  []col
 	width int
 }
 
+const minFlex = 12
+
+// widths returns each column's width; a hidden column gets -1.
 func (t table) widths() []int {
 	ws := make([]int, len(t.cols))
 	used, flex := 0, -1
@@ -43,6 +50,19 @@ func (t table) widths() []int {
 		}
 		used += c.width + 1
 	}
+	for used+minFlex > t.width {
+		worst := -1
+		for i, c := range t.cols {
+			if ws[i] >= 0 && c.drop > 0 && (worst < 0 || c.drop > t.cols[worst].drop) {
+				worst = i
+			}
+		}
+		if worst < 0 {
+			break
+		}
+		used -= t.cols[worst].width + 1
+		ws[worst] = -1
+	}
 	if flex >= 0 {
 		ws[flex] = max(t.width-used, 8)
 	}
@@ -50,20 +70,19 @@ func (t table) widths() []int {
 }
 
 func (t table) header() string {
-	ws := t.widths()
-	cells := make([]string, len(t.cols))
+	titles := make([]string, len(t.cols))
 	for i, c := range t.cols {
-		cells[i] = fit(c.title, ws[i])
+		titles[i] = c.title
 	}
-	return headSty.Render(strings.Join(cells, " "))
+	return headSty.Render(t.row(titles...))
 }
 
 func (t table) row(cells ...string) string {
 	ws := t.widths()
-	out := make([]string, len(cells))
+	out := make([]string, 0, len(cells))
 	for i, c := range cells {
-		if i < len(ws) {
-			out[i] = fit(c, ws[i])
+		if i < len(ws) && ws[i] >= 0 {
+			out = append(out, fit(c, ws[i]))
 		}
 	}
 	return strings.Join(out, " ")
