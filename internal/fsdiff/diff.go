@@ -43,6 +43,8 @@ func Diff(dir string, before *Snapshot) (string, error) {
 			writeRemoved(&b, p, o)
 		case !hadO && hadC:
 			writeAdded(&b, p, c)
+		case o.Withheld && c.Withheld && o.Sum == c.Sum && o.Sum != [32]byte{}:
+			// unchanged oversized file (fingerprints match)
 		case o.Withheld || c.Withheld:
 			writeOpaque(&b, p) // content unknown on at least one side
 		case bytes.Equal(o.Content, c.Content):
