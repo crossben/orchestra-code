@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -30,6 +31,7 @@ func newAgentsCmd() *cobra.Command {
 				return err
 			}
 			reg := cfg.BuildRegistry()
+			var keyHints []string
 
 			if probe {
 				return probeAgents(cmd, reg, cfg, probeTimeout)
@@ -37,15 +39,23 @@ func newAgentsCmd() *cobra.Command {
 
 			fmt.Printf("%-12s %-16s %s\n", "AGENT", "STATUS", "CAPABILITIES")
 			for _, a := range reg.All() {
-				status := "available"
-				if err := a.Health(); err != nil {
-					status = "not installed"
+				herr := a.Health()
+				status := agent.HealthLabel(herr)
+				var ee *agent.EnvError
+				if errors.As(herr, &ee) {
+					keyHints = append(keyHints, a.Name()+": "+herr.Error())
 				}
 				def := ""
 				if a.Name() == cfg.DefaultAgent {
 					def = " (default)"
 				}
 				fmt.Printf("%-12s %-16s %s%s%s\n", a.Name(), status, capList(a), apiTag(a), def)
+			}
+			for _, h := range keyHints {
+				fmt.Println(ui.Warn("! " + h))
+			}
+			for _, w := range cfg.LiteralSecretWarnings() {
+				fmt.Println(ui.Warn("! " + w))
 			}
 			fmt.Println(ui.Dim("\ntip: `orchestra agents --probe` checks agents can actually run, not just that they're installed"))
 			return nil
@@ -72,7 +82,11 @@ func probeAgents(cmd *cobra.Command, reg *agent.Registry, cfg *config.Config, ti
 		a := all[i]
 		rows[i].name = a.Name()
 		if err := a.Health(); err != nil {
-			rows[i].result = ui.Dim("not installed")
+			rows[i].result = ui.Dim(agent.HealthLabel(err))
+			var ee *agent.EnvError
+			if errors.As(err, &ee) {
+				rows[i].detail = err.Error()
+			}
 			return nil
 		}
 		p, ok := a.(agent.Prober)

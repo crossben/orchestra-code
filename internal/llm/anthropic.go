@@ -70,8 +70,12 @@ func (a *Anthropic) Complete(ctx context.Context, req Request) (Response, error)
 		Temperature: req.Temperature,
 	}
 
+	key := a.key
+	if req.APIKey != "" {
+		key = req.APIKey
+	}
 	headers := map[string]string{
-		"x-api-key":         a.key,
+		"x-api-key":         key,
 		"anthropic-version": anthropicVersion,
 	}
 

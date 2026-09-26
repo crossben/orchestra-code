@@ -249,7 +249,7 @@ func (m Model) probeCmd() tea.Cmd {
 			var res agent.ProbeResult
 			switch {
 			case a.Health() != nil:
-				res = agent.ProbeResult{OK: false, Detail: "not installed"}
+				res = agent.ProbeResult{OK: false, Detail: agent.HealthLabel(a.Health())}
 			default:
 				if p, ok := a.(agent.Prober); ok {
 					res = p.Probe(context.Background(), 45*time.Second)

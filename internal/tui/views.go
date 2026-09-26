@@ -118,8 +118,11 @@ func (m Model) agentsView() string {
 	b.WriteString("  " + t.header() + "\n")
 	for _, a := range m.d.Reg.All() {
 		installed := okSty.Render("✓ yes")
-		if a.Health() != nil {
+		if herr := a.Health(); herr != nil {
 			installed = dimSty.Render("✗ no")
+			if agent.HealthLabel(herr) == "missing key" {
+				installed = warnSty.Render("✗ key")
+			}
 		}
 		probe := dimSty.Render("press p")
 		if m.probing {

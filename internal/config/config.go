@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -30,6 +31,12 @@ type AgentConfig struct {
 	Args         []string `yaml:"args"`         // cli: headless/auto-approve prefix; task appended
 	DirFlag      string   `yaml:"dir_flag"`     // cli: flag to pass the working dir (e.g. opencode "--dir")
 	Capabilities []string `yaml:"capabilities"` // plan|implement|review
+
+	// Env adds environment variables for the agent (bring your own key).
+	// Values may reference variables as $VAR / ${VAR}, expanded at run time:
+	// cli agents receive them in their process environment; api agents use
+	// the entry named by api_key_env as their key.
+	Env map[string]string `yaml:"env"`
 
 	// API-agent fields (used when Type == "api").
 	Provider      string `yaml:"provider"`       // openai (default) | anthropic
@@ -420,6 +427,7 @@ func (c *Config) BuildRegistry() *agent.Registry {
 				continue
 			}
 			a.SetPricing(ac.PriceInputPerMTok, ac.PriceOutputPerMTok)
+			a.SetEnv(ac.Env)
 			reg.Add(a)
 			continue
 		}
@@ -427,7 +435,41 @@ func (c *Config) BuildRegistry() *agent.Registry {
 		if bin == "" {
 			bin = ac.Name
 		}
-		reg.Add(agent.New(ac.Name, bin, ac.Args, ac.DirFlag, caps))
+		a := agent.New(ac.Name, bin, ac.Args, ac.DirFlag, caps)
+		a.SetEnv(ac.Env)
+		reg.Add(a)
 	}
 	return reg
+}
+
+// LiteralSecretWarnings flags env: entries that look like credentials but hold
+// a literal value instead of a $VAR reference — orchestra.yaml is often
+// committed, so keys belong in the environment. Values are never echoed.
+func (c *Config) LiteralSecretWarnings() []string {
+	var out []string
+	for _, ac := range c.Agents {
+		keys := make([]string, 0, len(ac.Env))
+		for k := range ac.Env {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			v := ac.Env[k]
+			if v == "" || strings.Contains(v, "$") || !looksSecret(k) {
+				continue
+			}
+			out = append(out, fmt.Sprintf("agent %q: env.%s holds a literal value; use \"${SOME_VAR}\" so the key stays out of orchestra.yaml", ac.Name, k))
+		}
+	}
+	return out
+}
+
+func looksSecret(name string) bool {
+	n := strings.ToUpper(name)
+	for _, s := range []string{"KEY", "TOKEN", "SECRET", "PASSWORD"} {
+		if strings.Contains(n, s) {
+			return true
+		}
+	}
+	return false
 }

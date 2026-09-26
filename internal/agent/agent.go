@@ -109,6 +109,7 @@ type CLIAgent struct {
 	args    []string
 	dirFlag string // if set, inject "<dirFlag> <abs dir>" so CLIs that ignore cwd still isolate
 	caps    []Capability
+	env     map[string]string // extra environment ($VAR-expanded at spawn); the CLI keeps its own auth
 }
 
 // New builds a CLIAgent. dirFlag (may be empty) is the flag an agent needs to be
@@ -117,13 +118,22 @@ func New(name, bin string, args []string, dirFlag string, caps []Capability) *CL
 	return &CLIAgent{name: name, bin: bin, args: args, dirFlag: dirFlag, caps: caps}
 }
 
+// SetEnv sets extra environment variables for the CLI process, e.g. a
+// provider key: {"GROQ_API_KEY": "${MY_GROQ_KEY}"}. Values may reference
+// variables as $VAR or ${VAR}; they are expanded at every spawn.
+func (a *CLIAgent) SetEnv(env map[string]string) { a.env = copyEnv(env) }
+
 func (a *CLIAgent) Name() string               { return a.name }
 func (a *CLIAgent) Capabilities() []Capability { return a.caps }
 
-// Health reports whether the agent's binary is on PATH.
+// Health reports whether the agent's binary is on PATH and every variable its
+// env: block references is set (an *EnvError otherwise).
 func (a *CLIAgent) Health() error {
-	_, err := exec.LookPath(a.bin)
-	return err
+	if _, err := exec.LookPath(a.bin); err != nil {
+		return err
+	}
+	_, missing := expandEnv(a.env)
+	return firstMissing(a.name, missing)
 }
 
 // Run dispatches the task to the CLI via the runner.
@@ -223,10 +233,12 @@ func (a *CLIAgent) spec(task Task) runner.Spec {
 		args = append(args, a.dirFlag, dir) // tell cwd-ignoring CLIs where to work
 	}
 	args = append(args, task.Prompt)
+	env, _ := expandEnv(a.env)
 	return runner.Spec{
 		Bin:     a.bin,
 		Args:    args,
 		Dir:     dir,
+		Env:     env,
 		Timeout: task.Timeout,
 		Output:  task.Output,
 	}

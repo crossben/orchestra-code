@@ -1,8 +1,10 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/crossben/orchestra-code/internal/agent"
@@ -155,4 +157,54 @@ func loadFromSrc(dir, src string) (*Config, error) {
 
 func writeFile(dir, name, content string) error {
 	return os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644)
+}
+
+func TestBuildRegistryPassesEnvBlock(t *testing.T) {
+	t.Setenv("BYOK_CFG_GROQ", "")
+	t.Setenv("BYOK_CFG_WORK", "sk-work")
+	cfg, err := parseForTest(t, `
+agents:
+  - name: opencode-groq
+    bin: true
+    env:
+      GROQ_API_KEY: "${BYOK_CFG_GROQ}"
+  - name: sonnet
+    type: api
+    provider: anthropic
+    model: m
+    api_key_env: BYOK_CFG_UNUSED
+    env:
+      BYOK_CFG_UNUSED: "${BYOK_CFG_WORK}"
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := cfg.BuildRegistry()
+	cli, _ := reg.Get("opencode-groq")
+	var ee *agent.EnvError
+	if err := cli.Health(); !errors.As(err, &ee) || ee.Var != "BYOK_CFG_GROQ" {
+		t.Fatalf("cli agent should report the unset reference, got %v", err)
+	}
+	api, _ := reg.Get("sonnet")
+	if err := api.Health(); err != nil {
+		t.Fatalf("api agent key should come from env block: %v", err)
+	}
+}
+
+func TestLiteralSecretWarnings(t *testing.T) {
+	cfg, err := parseForTest(t, `
+agents:
+  - name: a
+    env:
+      GROQ_API_KEY: "gsk_live_abc"
+      MY_TOKEN: "${FROM_ENV}"
+      LOG_LEVEL: "debug"
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := cfg.LiteralSecretWarnings()
+	if len(w) != 1 || !strings.Contains(w[0], "GROQ_API_KEY") || strings.Contains(w[0], "gsk_live_abc") {
+		t.Fatalf("want one warning naming (not echoing) the literal key, got %v", w)
+	}
 }
