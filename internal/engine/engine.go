@@ -391,6 +391,10 @@ func runLoop(ctx context.Context, opts Options) (out Outcome, err error) {
 // ExecuteHeadless runs the loop non-interactively and commits any resulting
 // changes to the current branch (used inside a per-task worktree during parallel
 // execution). No accept/reject prompt — review happens later at merge time.
+//
+// Outside a git repository (a per-task directory copy) there is nothing to
+// commit: the changes are diffed against a pre-run snapshot and left in place
+// for the isolator to merge on accept.
 func ExecuteHeadless(ctx context.Context, opts Options) (out Outcome, err error) {
 	defer func() {
 		if err == nil {
@@ -398,11 +402,16 @@ func ExecuteHeadless(ctx context.Context, opts Options) (out Outcome, err error)
 		}
 	}()
 
+	before, inRepo, err := captureBaseline(opts.Dir)
+	if err != nil {
+		return out, err
+	}
+
 	out, err = runLoop(ctx, opts)
 	if err != nil {
 		return out, err
 	}
-	diff, derr := gitutil.Diff(opts.Dir)
+	diff, derr := workingTreeDiff(opts.Dir, before)
 	if derr != nil {
 		return out, fmt.Errorf("compute diff: %w", derr)
 	}
@@ -412,6 +421,10 @@ func ExecuteHeadless(ctx context.Context, opts Options) (out Outcome, err error)
 	}
 	out.HadChanges = true
 	out.Diff = diff
+	if !inRepo {
+		opts.logf("%s changes kept in the isolated copy", ui.Success("✓"))
+		return out, nil
+	}
 	if err := gitutil.Commit(opts.Dir, commitMessage(opts.Prompt)); err != nil {
 		return out, fmt.Errorf("commit changes: %w", err)
 	}

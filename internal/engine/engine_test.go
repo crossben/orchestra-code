@@ -246,3 +246,26 @@ echo "attempt $n"
 		t.Fatalf("output not streamed: %q", s)
 	}
 }
+
+func TestExecuteHeadlessNonGitDiffsWithoutCommit(t *testing.T) {
+	dir := t.TempDir() // deliberately NOT a git repository
+	mustWrite(t, filepath.Join(dir, "pre.txt"), "before\n")
+
+	out, err := ExecuteHeadless(context.Background(), optsFor(&writeAgent{name: "fake", path: "created.txt", content: "hi\n"}, dir))
+	if err != nil {
+		t.Fatalf("ExecuteHeadless: %v", err)
+	}
+	if !out.HadChanges {
+		t.Fatal("expected changes")
+	}
+	if !strings.Contains(out.Diff, "diff --git a/created.txt b/created.txt") || !strings.Contains(out.Diff, "+hi") {
+		t.Fatalf("diff missing the new file:\n%s", out.Diff)
+	}
+	if strings.Contains(out.Diff, "pre.txt") {
+		t.Fatalf("diff should only show the run's changes:\n%s", out.Diff)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git")); !os.IsNotExist(err) {
+		t.Fatal("headless run in a plain dir must not create a repository")
+	}
+	mustContain(t, filepath.Join(dir, "created.txt"), "hi")
+}

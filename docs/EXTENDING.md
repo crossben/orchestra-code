@@ -90,7 +90,8 @@ Notes:
 - Self-correction works like any agent: on validation failure the failure text is fed back
   and the model re-edits its own prior changes in place.
 - Works everywhere CLI agents do: `run`, shell, dashboard chat, planning, routing, and even
-  `do --parallel` worktrees (patches apply inside each isolated worktree).
+  `do --parallel` worktrees (patches apply inside each isolated worktree, or folder copy
+  outside a git repository).
 
 ---
 
