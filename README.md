@@ -198,6 +198,18 @@ go build -o bin/orchestra ./cmd/orchestra
 ./bin/orchestra init            # write a starter orchestra.yaml
 ```
 
+## Updating
+
+Release builds check GitHub for a newer version at most once a day when started in an interactive
+terminal, and ask `Download and install now? [Y/n]`. On yes, Orchestra downloads the archive for your
+platform, verifies its SHA-256 against the release's `checksums.txt`, replaces its own executable, and
+exits — relaunch to use the new version. Run `orchestra update` to check on demand (`--check` to only
+report, `-y` to skip the prompt).
+
+The check never runs in pipes, scripts or CI (`CI` set), for dev/snapshot builds, or when
+`ORCHESTRA_NO_UPDATE_CHECK=1`. Installed via Homebrew/Scoop or into a directory you can't write to?
+Update the same way you installed instead.
+
 ## Configuration
 
 Orchestra works with no config (built-in defaults for the common agents). To customize, `orchestra init`
@@ -263,6 +275,7 @@ A config file overrides defaults and adds agents; matching names replace the bui
 | `orchestra history` | recent runs + preferred agent                      |
 | `orchestra agents`  | list agents; `--probe` live-tests each can actually run |
 | `orchestra init`    | write a starter `orchestra.yaml`                   |
+| `orchestra update`  | install the latest release; `--check` only reports, `-y` skips the prompt |
 
 `run` flags: `--agent`, `--test`, `--retries`, `--timeout`, `--force`. `do`: `--agent`, `--yes`, `--parallel`, `--jobs`. Global: `--dir`.
 
