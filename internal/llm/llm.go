@@ -34,6 +34,14 @@ type Request struct {
 type Response struct {
 	Text       string // assistant text
 	StopReason string // provider-reported stop reason (informational)
+	Usage      Usage  // token counts; zero when the provider did not report them
+}
+
+// Usage is the token accounting a provider reports for one completion. Many
+// gateways omit it; a missing usage object is zero, never an error.
+type Usage struct {
+	InputTokens  int
+	OutputTokens int
 }
 
 // Provider abstracts one HTTP LLM API.

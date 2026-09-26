@@ -56,6 +56,32 @@ agents:
 	if len(names) < 2 || names[len(names)-1] != "gpt" {
 		t.Fatalf("registry names: %v", names)
 	}
+	if in, out := api.Pricing(); in != 0 || out != 0 {
+		t.Fatalf("no price fields → unpriced, got %v/%v", in, out)
+	}
+}
+
+func TestBuildRegistryAPIAgentPricing(t *testing.T) {
+	cfg, err := parseForTest(t, `
+agents:
+  - name: sonnet
+    type: api
+    provider: anthropic
+    model: claude-sonnet
+    price_input_per_mtok: 3
+    price_output_per_mtok: 15.5
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ := cfg.BuildRegistry().Get("sonnet")
+	api, ok := a.(*agent.APIAgent)
+	if !ok {
+		t.Fatalf("expected *agent.APIAgent, got %T", a)
+	}
+	if in, out := api.Pricing(); in != 3 || out != 15.5 {
+		t.Fatalf("pricing = %v/%v, want 3/15.5", in, out)
+	}
 }
 
 func TestBuildRegistrySkipsBrokenAPIAgent(t *testing.T) {

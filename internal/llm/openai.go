@@ -34,6 +34,10 @@ type openaiResponse struct {
 		Message      openaiMessage `json:"message"`
 		FinishReason string        `json:"finish_reason"`
 	} `json:"choices"`
+	Usage struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+	} `json:"usage"`
 	Error *struct {
 		Message string `json:"message"`
 		Type    string `json:"type"`
@@ -67,5 +71,6 @@ func (o *OpenAI) Complete(ctx context.Context, req Request) (Response, error) {
 	return Response{
 		Text:       out.Choices[0].Message.Content,
 		StopReason: out.Choices[0].FinishReason,
+		Usage:      Usage{InputTokens: out.Usage.PromptTokens, OutputTokens: out.Usage.CompletionTokens},
 	}, nil
 }

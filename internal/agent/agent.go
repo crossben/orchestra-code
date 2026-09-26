@@ -46,6 +46,7 @@ type Result struct {
 	ExitCode int
 	Duration time.Duration
 	Output   string // combined stdout+stderr the agent produced (for question detection)
+	Usage    Usage  // tokens/cost when the agent reports them (API agents); zero otherwise
 }
 
 // Agent is anything Orchestra can dispatch a Task to.
