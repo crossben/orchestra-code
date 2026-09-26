@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/crossben/orchestra-code/internal/agent"
 	"github.com/crossben/orchestra-code/internal/engine"
 	"github.com/crossben/orchestra-code/internal/memory"
 	"github.com/crossben/orchestra-code/internal/ui"
@@ -146,7 +147,7 @@ func (m Model) onTurn(msg turnMsg) (tea.Model, tea.Cmd) {
 			} else {
 				text = "↺ cancelled — any changes were reverted"
 			}
-			m.record(memory.Run{Agent: agentName, Prompt: run.task, Outcome: "cancelled", Attempts: t.Attempts})
+			m.record(usageRun(memory.Run{Agent: agentName, Prompt: run.task, Outcome: "cancelled", Attempts: t.Attempts}, t.Usage))
 		}
 		m.messages = append(m.messages, chatLine{role: "sys", text: text})
 		m.logEvent("turn", "run cancelled")
@@ -155,7 +156,7 @@ func (m Model) onTurn(msg turnMsg) (tea.Model, tea.Cmd) {
 		m.messages = append(m.messages, chatLine{role: "sys", text: "✗ " + t.Err.Error()})
 		m.logEvent("error", t.Err.Error())
 		if msg.started {
-			m.record(memory.Run{Agent: agentName, Prompt: run.task, Outcome: "failed", Attempts: t.Attempts})
+			m.record(usageRun(memory.Run{Agent: agentName, Prompt: run.task, Outcome: "failed", Attempts: t.Attempts}, t.Usage))
 		}
 	case msg.answered:
 		run.result = "answered"
@@ -170,7 +171,7 @@ func (m Model) onTurn(msg turnMsg) (tea.Model, tea.Cmd) {
 			resp = "(the agent made no file changes)"
 		}
 		m.messages = append(m.messages, chatLine{role: "agent", text: resp, agent: agentName})
-		m.record(memory.Run{Agent: agentName, Prompt: run.task, Outcome: "no-change", Attempts: t.Attempts, Passed: t.Report.Passed()})
+		m.record(usageRun(memory.Run{Agent: agentName, Prompt: run.task, Outcome: "no-change", Attempts: t.Attempts, Passed: t.Report.Passed()}, t.Usage))
 		m.logEvent("turn", fmt.Sprintf("%s replied without changes", agentName))
 		ui.Notify("Orchestra", "Agent finished — "+firstLine(resp))
 	default:
@@ -222,10 +223,10 @@ func (m Model) reject() (tea.Model, tea.Cmd) {
 
 func (m Model) finishReview(outcome string) Model {
 	t := m.pending
-	m.record(memory.Run{
+	m.record(usageRun(memory.Run{
 		Agent: m.pendAg, Prompt: m.pendTask, Outcome: outcome,
 		Attempts: t.Attempts, Passed: t.Report.Passed(), Diff: t.Diff,
-	})
+	}, t.Usage))
 	m.logEvent("turn", outcome)
 	m.cstate = chatIdle
 	m.pending = engine.Turn{}
@@ -235,6 +236,12 @@ func (m Model) finishReview(outcome string) Model {
 	m.layout()
 	m.setChatContent()
 	return m
+}
+
+// usageRun stamps a run's summed token usage onto its history record.
+func usageRun(r memory.Run, u agent.Usage) memory.Run {
+	r.TokensIn, r.TokensOut, r.CostUSD = u.InputTokens, u.OutputTokens, u.CostUSD
+	return r
 }
 
 // --- rendering ---

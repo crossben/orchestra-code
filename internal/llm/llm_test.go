@@ -230,3 +230,52 @@ func TestEmptyChoicesIsServerError(t *testing.T) {
 		t.Fatalf("unhelpful message %q; want it to contain %q", le.Error(), want)
 	}
 }
+
+// --- usage parsing ---
+
+// serveJSON returns a fake API server that always replies with body.
+func serveJSON(t *testing.T, body string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestProvidersParseUsage(t *testing.T) {
+	cases := []struct {
+		name, provider, body string
+		want                 Usage
+	}{
+		{"openai with usage", "openai",
+			`{"choices":[{"message":{"role":"assistant","content":"x"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1200,"completion_tokens":34,"total_tokens":1234}}`,
+			Usage{InputTokens: 1200, OutputTokens: 34}},
+		{"openai without usage", "openai",
+			`{"choices":[{"message":{"role":"assistant","content":"x"},"finish_reason":"stop"}]}`,
+			Usage{}},
+		{"anthropic with usage", "anthropic",
+			`{"content":[{"type":"text","text":"x"}],"stop_reason":"end_turn","usage":{"input_tokens":900,"output_tokens":55}}`,
+			Usage{InputTokens: 900, OutputTokens: 55}},
+		{"anthropic without usage", "anthropic",
+			`{"content":[{"type":"text","text":"x"}],"stop_reason":"end_turn"}`,
+			Usage{}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv := serveJSON(t, c.body)
+			p, err := New(c.provider, srv.URL, "k", "m", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := p.Complete(context.Background(), Request{Messages: []Message{{Role: "user", Content: "hi"}}})
+			if err != nil {
+				t.Fatalf("missing/present usage must never be an error: %v", err)
+			}
+			if resp.Text != "x" || resp.Usage != c.want {
+				t.Fatalf("resp = %+v, want usage %+v", resp, c.want)
+			}
+		})
+	}
+}

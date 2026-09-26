@@ -37,6 +37,12 @@ type AgentConfig struct {
 	APIBase       string `yaml:"api_base"`       // optional endpoint override
 	APIKeyEnv     string `yaml:"api_key_env"`    // env var holding the key (provider default)
 	ContextBudget int    `yaml:"context_budget"` // repo-snapshot byte cap (0 → DefaultContextBudget)
+
+	// Optional pricing (USD per million tokens). There is no built-in price
+	// table — prices go stale — so cost is computed only when both are set;
+	// otherwise tokens are still recorded and cost shows as "—".
+	PriceInputPerMTok  float64 `yaml:"price_input_per_mtok"`
+	PriceOutputPerMTok float64 `yaml:"price_output_per_mtok"`
 }
 
 // ValidateConfig configures the validation pipeline. Any empty stage is skipped.
@@ -413,6 +419,7 @@ func (c *Config) BuildRegistry() *agent.Registry {
 				fmt.Printf("(warning: skipping api agent %q: %v)\n", ac.Name, err)
 				continue
 			}
+			a.SetPricing(ac.PriceInputPerMTok, ac.PriceOutputPerMTok)
 			reg.Add(a)
 			continue
 		}

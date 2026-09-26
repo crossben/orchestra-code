@@ -216,6 +216,9 @@ func (m *Model) record(r memory.Run) {
 			st.Accepted++
 		}
 		st.LastUsed = r.Time
+		st.TokensIn += r.TokensIn
+		st.TokensOut += r.TokensOut
+		st.CostUSD += r.CostUSD
 		m.stats[r.Agent] = st
 	}
 	m.reload()

@@ -64,7 +64,7 @@ type EventKind int
 
 const (
 	EventAttempt    EventKind = iota // an attempt is starting (Attempt, Max)
-	EventAgentDone                   // the agent exited (ExitCode, Duration)
+	EventAgentDone                   // the agent exited (ExitCode, Duration, Usage)
 	EventStageStart                  // a validation stage started (Stage)
 	EventStageDone                   // a validation stage finished (Stage, Passed)
 )
@@ -78,6 +78,7 @@ type Event struct {
 	Passed   bool
 	ExitCode int
 	Duration time.Duration
+	Usage    agent.Usage // EventAgentDone: this attempt's tokens/cost (zero when unreported)
 }
 
 func (o Options) emit(e Event) {
@@ -101,7 +102,8 @@ type Outcome struct {
 	Report     validate.Report
 	HadChanges bool
 	Accepted   bool
-	Diff       string // the reviewed diff ("" when nothing changed)
+	Diff       string      // the reviewed diff ("" when nothing changed)
+	Usage      agent.Usage // tokens/cost summed over every attempt
 }
 
 // Execute runs the full supervised pipeline once (including retries). The reader
@@ -257,6 +259,7 @@ type Turn struct {
 	Diff       string
 	HadChanges bool
 	Err        error
+	Usage      agent.Usage // tokens/cost summed over every attempt
 
 	// Baseline is the pre-turn directory snapshot when the working dir is not
 	// a git repository (nil inside a repo). The TUI passes it back to Revert.
@@ -306,13 +309,14 @@ func Produce(ctx context.Context, opts Options) Turn {
 			Timeout: opts.Timeout,
 			Output:  opts.Output,
 		})
+		t.Usage = t.Usage.Add(res.Usage) // spent even when the attempt failed
 		if err != nil {
 			t.Err = err
 			return t
 		}
 		t.ExitCode = res.ExitCode
 		t.AgentText = res.Output
-		opts.emit(Event{Kind: EventAgentDone, Attempt: attempt, Max: maxAttempts, ExitCode: res.ExitCode, Duration: res.Duration})
+		opts.emit(Event{Kind: EventAgentDone, Attempt: attempt, Max: maxAttempts, ExitCode: res.ExitCode, Duration: res.Duration, Usage: res.Usage})
 		t.Report = validate.RunPipelineObserved(ctx, opts.Dir, opts.Stages, func(done bool, r validate.StageResult) {
 			if done {
 				opts.emit(Event{Kind: EventStageDone, Attempt: attempt, Max: maxAttempts, Stage: r.Name, Passed: r.Passed})
@@ -365,6 +369,7 @@ func runLoop(ctx context.Context, opts Options) (out Outcome, err error) {
 		if opts.Label == "" {
 			fmt.Println(ui.Rule(48))
 		}
+		out.Usage = out.Usage.Add(res.Usage) // spent even when the attempt failed
 		if rerr != nil {
 			return out, fmt.Errorf("agent %q failed to run: %w", opts.Agent.Name(), rerr)
 		}
@@ -384,6 +389,9 @@ func runLoop(ctx context.Context, opts Options) (out Outcome, err error) {
 			break
 		}
 		prompt = retryPrompt(opts.Prompt, out.Report)
+	}
+	if u := out.Usage.String(); u != "" {
+		opts.logf("%s %s", ui.Accent("▸"), ui.Dim(u))
 	}
 	return out, nil
 }
@@ -442,13 +450,16 @@ func recordMemory(opts Options, out Outcome, outcome string) {
 		dir = abs
 	}
 	if rerr := opts.Memory.Record(memory.Run{
-		Dir:      dir,
-		Agent:    opts.Agent.Name(),
-		Prompt:   opts.Prompt,
-		Outcome:  outcome,
-		Attempts: out.Attempts,
-		Passed:   out.Report.Passed(),
-		Diff:     out.Diff,
+		Dir:       dir,
+		Agent:     opts.Agent.Name(),
+		Prompt:    opts.Prompt,
+		Outcome:   outcome,
+		Attempts:  out.Attempts,
+		Passed:    out.Report.Passed(),
+		Diff:      out.Diff,
+		TokensIn:  out.Usage.InputTokens,
+		TokensOut: out.Usage.OutputTokens,
+		CostUSD:   out.Usage.CostUSD,
 	}, time.Now()); rerr != nil {
 		opts.logf("(warning: could not record to memory: %v)", rerr)
 	}

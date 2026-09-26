@@ -93,6 +93,30 @@ Notes:
   `do --parallel` worktrees (patches apply inside each isolated worktree, or folder copy
   outside a git repository).
 
+### Tokens and cost
+
+API agents record the token usage the provider reports (OpenAI-compatible
+`usage.prompt_tokens`/`completion_tokens`, Anthropic `usage.input_tokens`/`output_tokens`),
+summed over every attempt of a run including self-correction retries. Gateways that omit
+usage simply record nothing. To also see cost, set the model's prices — Orchestra ships no
+price table, because prices change:
+
+```yaml
+agents:
+  - name: sonnet
+    type: api
+    provider: anthropic
+    model: claude-sonnet-4-5
+    price_input_per_mtok: 3      # USD per 1M input tokens
+    price_output_per_mtok: 15    # USD per 1M output tokens
+```
+
+Cost is computed only when both prices are set (> 0); otherwise tokens are still recorded
+and cost shows as `—`. Usage appears in the end-of-run line
+(`▸ tokens 12.3k in / 1.1k out · $0.04`), `orchestra history`, the `benchmark` leaderboard,
+and the dashboard's History, Benchmarks and Agents (per-agent totals) tabs. CLI agents
+don't report usage yet, so their runs show `—`.
+
 ---
 
 ## 3. Implement the `Agent` interface (for a built-in / non-CLI agent)
