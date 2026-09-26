@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/crossben/orchestra-code/internal/config"
 	"github.com/crossben/orchestra-code/internal/gitutil"
@@ -29,6 +30,12 @@ func newRootCmd() *cobra.Command {
 		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		// Before any command: offer a newer release when running interactively.
+		// Never fails — update problems must not block the requested command.
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			launchCheck(cmd, realUpdateEnv(), newUpdater(), os.Exit)
+			return nil
+		},
 		// No subcommand → start the interactive shell.
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runShell(cmd)
@@ -45,6 +52,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newHistoryCmd())
 	root.AddCommand(newBenchmarkCmd())
 	root.AddCommand(newDashboardCmd())
+	root.AddCommand(newUpdateCmd())
 	return root
 }
 

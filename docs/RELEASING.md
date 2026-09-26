@@ -23,6 +23,14 @@ GoReleaser. In ~2 minutes the [Releases page](https://github.com/crossben/orches
 The version is stamped into the binary at build time via `-ldflags "-X main.version=<tag>"`, so
 `orchestra --version` reports the tag.
 
+**The self-updater depends on these names.** `orchestra update` (and the daily launch check) reads
+`/releases/latest`, downloads `orchestra_<version>_<os>_<arch>.tar.gz` (`.zip` on windows) and refuses to
+install unless `checksums.txt` has a matching `<sha256>  <filename>` line. The archive must contain the
+`orchestra` (`orchestra.exe`) binary at its root. Changing `archives.name_template`, the archive formats,
+the binary name or `checksum.name_template` in `.goreleaser.yaml` breaks updates for every installed
+version (they look for the old names), so treat them as a stable contract; `internal/update` (`AssetName`)
+mirrors them.
+
 **Versioning:** semver, `vMAJOR.MINOR.PATCH`. Pre-release suffixes (e.g. `v0.8.0-rc1`) are published as
 GitHub pre-releases automatically (`prerelease: auto`).
 
