@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/crossben/orchestra-code/internal/agent"
 	"github.com/crossben/orchestra-code/internal/engine"
 	"github.com/crossben/orchestra-code/internal/gitutil"
 )
@@ -47,6 +48,7 @@ type liveRun struct {
 	agentDone bool
 	exitCode  int
 	agentDur  time.Duration
+	usage     agent.Usage // summed over finished attempts (unknown for CLI agents)
 	stages    []stageState
 	past      []string // one summary line per finished attempt
 	lines     []string // agent output tail
@@ -263,6 +265,7 @@ func (m *Model) applyEvent(e engine.Event) {
 	case engine.EventAgentDone:
 		run.agentDone = true
 		run.exitCode, run.agentDur = e.ExitCode, e.Duration
+		run.usage = run.usage.Add(e.Usage)
 	case engine.EventStageStart, engine.EventStageDone:
 		state := stRunning
 		if e.Kind == engine.EventStageDone {
@@ -367,6 +370,10 @@ func (m Model) runPanel(w, h int) string {
 		} else if run.agentDone {
 			head = append(head, "  "+warnSty.Render("no checks configured — unverified"))
 		}
+	}
+
+	if u := run.usage.String(); u != "" {
+		head = append(head, dimSty.Render("∑ "+u))
 	}
 
 	// Output tail fills the rest.

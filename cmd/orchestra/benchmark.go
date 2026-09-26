@@ -327,6 +327,7 @@ func persistComparison(task, level string, pairs []abPair, agents []agent.Agent)
 			Valid: r.valid(), Skipped: r.skipped(), Changed: r.out.HadChanges,
 			Duration: r.dur, Retries: retriesOf(r),
 			Files: r.files, Added: r.added, Removed: r.removed, Exit: r.out.ExitCode, Won: false,
+			TokensIn: r.out.Usage.InputTokens, TokensOut: r.out.Usage.OutputTokens, CostUSD: r.out.Usage.CostUSD,
 		}, now)
 	}
 	for i := range agents {
@@ -417,7 +418,7 @@ func firstMergeable(ranked []benchResult) (benchResult, bool) {
 
 func printLeaderboard(ranked []benchResult) {
 	fmt.Printf("\n%s\n", ui.Heading("leaderboard"))
-	fmt.Printf("%-4s %-12s %-8s %-8s %-8s %-6s %s\n", "RANK", "AGENT", "VALID", "TIME", "RETRIES", "FILES", "±LINES")
+	fmt.Printf("%-4s %-12s %-8s %-8s %-8s %-6s %-11s %-7s %s\n", "RANK", "AGENT", "VALID", "TIME", "RETRIES", "FILES", "TOKENS", "COST", "±LINES")
 	for i, r := range ranked {
 		rank := fmt.Sprintf("%d", i+1)
 		if i == 0 {
@@ -444,9 +445,12 @@ func printLeaderboard(ranked []benchResult) {
 		} else if !r.out.HadChanges {
 			detail = "  " + ui.Dim("(no changes)")
 		}
-		fmt.Printf("%-4s %-12s %-8s %-8s %-8d %-6d %s%s\n",
+		u := r.out.Usage
+		fmt.Printf("%-4s %-12s %-8s %-8s %-8d %-6d %s %s %s%s\n",
 			rank, r.agent, valid,
-			r.dur.Round(time.Second/10).String(), retriesOf(r), r.files, lines, detail)
+			r.dur.Round(time.Second/10).String(), retriesOf(r), r.files,
+			padCell(agent.TokensCell(u.InputTokens, u.OutputTokens), 11), padCell(agent.CostCell(u.CostUSD), 7),
+			lines, detail)
 	}
 }
 
@@ -465,6 +469,7 @@ func persistBenchmarks(_ context.Context, task string, ranked []benchResult) {
 			Duration: r.dur, Retries: retriesOf(r),
 			Files: r.files, Added: r.added, Removed: r.removed,
 			Exit: r.out.ExitCode, Won: i == 0,
+			TokensIn: r.out.Usage.InputTokens, TokensOut: r.out.Usage.OutputTokens, CostUSD: r.out.Usage.CostUSD,
 		}, now)
 	}
 }
