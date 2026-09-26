@@ -248,7 +248,8 @@ The nice-to-haves that make the project stand out — build only once the core i
 - **Benchmark mode ✅ DONE:** `orchestra benchmark "<task>"` runs the task through every available
   agent, each in an isolated git worktree (parallel), then ranks a leaderboard by validation → retries
   → speed → diff size, offers to merge the winner, and records results to SQLite (`benchmarks` table)
-  for future data-driven routing. Tokens/cost deferred (agent CLIs don't report usage generically).
+  for data-driven routing. **Tokens/cost ✅ (API agents):** usage is recorded per run/benchmark and priced
+  from optional `price_input_per_mtok`/`price_output_per_mtok`; CLI agents stay "—" (no generic usage report).
 - **Plugin SDK ✅ DONE (lightweight):** the `Agent` interface is the extension point. Any CLI agent is
   added via `orchestra.yaml` (name/bin/args/dir_flag/capabilities) with **zero code**; in-process agents
   implement the interface (+ optional Querier/Prober/QuietRunner/QuietQuerier). Documented in
@@ -261,6 +262,12 @@ The nice-to-haves that make the project stand out — build only once the core i
 - **Git-free supervision ✅ DONE:** outside a repository the engine snapshots the directory
   (`internal/fsdiff`), shows a git-style diff against the snapshot, and restores it on reject — so
   `run`/`do`/shell work in plain folders. `--parallel` and `benchmark` still require git (worktrees).
+- **Router v2 ✅ DONE (2026-09):** optional direct-API classifier (`router.classifier`) and history-aware
+  agent resolution from accepted runs + benchmark wins (design: docs/superpowers/specs/2026-09-26-router-v2-design.md).
+- **Git-free parallel & benchmark ✅ DONE (2026-09):** `worktree.Isolator` with a copy isolator for plain
+  folders (design: docs/superpowers/specs/2026-09-26-gitfree-parallel-design.md).
+- **Self-updater ✅ DONE (2026-09):** launch-time check (24h throttle, TTY only), checksum-verified in-place
+  replace, exit to relaunch; `orchestra update` (design: docs/superpowers/specs/2026-09-26-auto-update-design.md).
 - **Context engine:** *deferred* — the supported agents gather their own repo context, so pre-selecting a
   file slice is largely redundant. Revisit only if token/cost becomes a measured problem.
 

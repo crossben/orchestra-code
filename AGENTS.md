@@ -37,13 +37,14 @@ Binary is at `bin/orchestra` (gitignored).
 - `cmd/orchestra/` — Cobra CLI (main.go + one file per subcommand: run, do, plan, dashboard, agents, etc.)
 - `internal/engine/` — the core supervised loop (dispatch → validate → retry → review). Every front door (`run`, shell, `do`) drives this.
 - `internal/agent/` — Agent interface + registry. This is the extension point for adding new agents.
-- `internal/router/` — AI routing: classifies intent → picks agent. Uses a CLI agent now; API planned.
+- `internal/router/` — AI routing: classifies intent → picks agent. CLI classifier by default; optional direct-API classifier (`router.classifier`); history-aware agent resolution via the `History` interface.
 - `internal/planner/` — decomposes requests into ordered steps with `depends_on` for parallelism.
-- `internal/scheduler/` — bounded-concurrency DAG runner for parallel worktrees.
-- `internal/worktree/` — git worktree isolation (branch per task, merge + conflict detection).
+- `internal/scheduler/` — bounded-concurrency DAG runner for parallel isolated tasks.
+- `internal/worktree/` — task isolation behind the `Isolator` interface: `worktree.New(dir)` picks git worktrees in a repository (branch per task, merge + conflict detection) or a `CopyIsolator` in plain folders (temp copy per task, all-or-nothing merge, conflict if a touched file changed in the source).
 - `internal/validate/` — build → lint → test pipeline, auto-detects toolchain, stops on first failure.
 - `internal/config/` — YAML config + built-in agent defaults + toolchain auto-detection.
-- `internal/memory/` — SQLite history at `~/.orchestra/orchestra.db` (never in the repo tree).
+- `internal/memory/` — SQLite history at `~/.orchestra/orchestra.db` (never in the repo tree): runs, diffs, benchmarks, tokens/cost, and the per-directory agent scores the router uses.
+- `internal/update/` — self-updater: checks GitHub Releases (throttled to once per 24h), verifies `checksums.txt`, swaps the binary in place. Relies on the GoReleaser archive name template — see docs/RELEASING.md.
 - `internal/tui/` — Bubble Tea dashboard: Chat (live run panel + file-by-file review), Changes, History, Agents, Benchmarks, Logs. One file per concern (chat, live, review, views, chrome, theme, table).
 - `internal/ui/` — terminal styling (gradients, spinners, diffs). TTY-aware.
 - `internal/shell/` — interactive chat REPL.
@@ -75,7 +76,8 @@ dispatch → validate → retry (self-correct) → review (accept/reject)
 Git is optional. Inside a repository, diffs and rejects use git and the tree must start clean
 (reject does `git restore`). Outside one — like opencode or claude — the engine snapshots the
 directory first (`internal/fsdiff`), diffs against that snapshot, and restores from it on reject;
-accept just keeps the files. `--parallel` and `benchmark` still require a repository (worktrees).
+accept just keeps the files. `--parallel` and `benchmark` work in both: worktrees inside a repository,
+per-task directory copies (`worktree.CopyIsolator`) outside one.
 
 If you change validation or retry logic, you change all three entry points. The engine is the product — not the CLI or the TUI.
 
@@ -124,9 +126,11 @@ Live runs: the dashboard calls `engine.Produce` with `OnEvent` (attempt / agent-
 
 These are not interchangeable with other TUI frameworks. Tests are headless (`tui_test.go` renders views without a TTY by injecting `WindowSizeMsg`); end-to-end chat tests drive the real worker with fake-agent shell scripts.
 
-## Router is CLI-based
+## Router
 
-The AI router (`internal/router/`) classifies intent by dispatching to an agent in query mode (e.g. `claude -p`), not by calling an LLM API itself. It inherits agent CLI quirks: needs `--dangerously-skip-permissions`, uses the same `runner` package, and the classification latency is whatever the agent takes. Since `APIAgent` also implements `Querier`, an api-type agent can serve as the router's classifier today; a dedicated direct-API classifier inside `internal/router` remains planned but unimplemented.
+By default the AI router (`internal/router/`) classifies intent by dispatching to an agent in query mode (e.g. `claude -p`). That inherits agent CLI quirks: needs `--dangerously-skip-permissions`, uses the same `runner` package, and the classification latency is whatever the agent takes. Setting `router.classifier: {provider, model}` switches classification to `APIClassifier`, one direct `llm.Provider` call (falls back to the CLI classifier if the key is missing); `router.agent` still answers questions.
+
+Agent resolution: AI suggestion → history pick (`History` interface, implemented by `memory.Store`: Laplace-smoothed accept rate over runs + benchmarks in this directory, ≥3 samples, strict winner) → static `router.routes` → default agent → first healthy. The router never imports memory.
 
 ## Gitignored directories
 
