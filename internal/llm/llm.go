@@ -24,6 +24,7 @@ type Message struct {
 
 // Request is a single completion request.
 type Request struct {
+	APIKey      string    // overrides the provider's configured key when non-empty
 	System      string    // system preamble (output contract, principles)
 	Messages    []Message // conversation; typically one user message
 	MaxTokens   int       // hard cap on the reply; provider default when 0

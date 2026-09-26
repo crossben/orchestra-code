@@ -25,7 +25,8 @@ import (
 type APIAgent struct {
 	name   string
 	model  string
-	keyEnv string // env var holding the API key
+	keyEnv string            // env var holding the API key
+	env    map[string]string // optional env: block; may supply keyEnv (e.g. "${WORK_KEY}")
 	prov   llm.Provider
 	caps   []Capability
 	budget int
@@ -91,13 +92,37 @@ func (a *APIAgent) Model() string { return a.model }
 // ProviderName returns the llm provider backing this agent.
 func (a *APIAgent) ProviderName() string { return a.prov.Name() }
 
-// Health reports whether the agent is usable without network I/O: the API key
-// env var must be set (mirrors CLIAgent's cheap binary-on-PATH check).
-func (a *APIAgent) Health() error {
-	if v := os.Getenv(a.keyEnv); strings.TrimSpace(v) == "" {
-		return fmt.Errorf("environment variable %s is not set (required by api agent %q)", a.keyEnv, a.name)
+// SetEnv sets the agent's env: block. Only the entry named by api_key_env is
+// used: it lets one agent read its key from another variable, e.g.
+// {"ANTHROPIC_API_KEY": "${WORK_ANTHROPIC_KEY}"}.
+func (a *APIAgent) SetEnv(env map[string]string) { a.env = copyEnv(env) }
+
+// apiKey resolves the key: the env: block's entry for keyEnv when present,
+// otherwise the process environment. A missing key is an *EnvError.
+func (a *APIAgent) apiKey() (string, error) {
+	if raw, ok := a.env[a.keyEnv]; ok {
+		pairs, missing := expandEnv(map[string]string{a.keyEnv: raw})
+		if err := firstMissing(a.name, missing); err != nil {
+			return "", err
+		}
+		key := strings.TrimPrefix(pairs[0], a.keyEnv+"=")
+		if strings.TrimSpace(key) == "" {
+			return "", &EnvError{Agent: a.name, Var: a.keyEnv}
+		}
+		return key, nil
 	}
-	return nil
+	key := os.Getenv(a.keyEnv)
+	if strings.TrimSpace(key) == "" {
+		return "", &EnvError{Agent: a.name, Var: a.keyEnv}
+	}
+	return key, nil
+}
+
+// Health reports whether the agent is usable without network I/O: its API key
+// must resolve (mirrors CLIAgent's cheap binary-on-PATH check).
+func (a *APIAgent) Health() error {
+	_, err := a.apiKey()
+	return err
 }
 
 // outputContract is the strict reply format demanded of the model.
@@ -193,7 +218,10 @@ func (a *APIAgent) Probe(ctx context.Context, timeout time.Duration) ProbeResult
 	case err != nil:
 		detail := firstMeaningfulLine(err.Error())
 		var le *llm.Error
-		if errors.As(err, &le) && le.UserDetail() != "" {
+		switch {
+		case errors.As(err, &le) && le.Kind == llm.ErrAuth:
+			detail = fmt.Sprintf("%s rejected the key in %s — check it and that it can use this model", le.Provider, a.keyEnv)
+		case errors.As(err, &le) && le.UserDetail() != "":
 			detail = le.UserDetail()
 		}
 		return ProbeResult{OK: false, Detail: detail}
@@ -211,7 +239,12 @@ func (a *APIAgent) complete(ctx context.Context, system, user string, timeout ti
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
+	key, err := a.apiKey()
+	if err != nil {
+		return llm.Response{}, err
+	}
 	return a.prov.Complete(ctx, llm.Request{
+		APIKey:      key,
 		System:      system,
 		Messages:    []llm.Message{{Role: "user", Content: user}},
 		Temperature: 0,

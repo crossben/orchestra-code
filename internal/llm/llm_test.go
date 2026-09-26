@@ -279,3 +279,32 @@ func TestProvidersParseUsage(t *testing.T) {
 		})
 	}
 }
+
+func TestRequestAPIKeyOverridesConfiguredKey(t *testing.T) {
+	var gotAuth, gotXKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth, gotXKey = r.Header.Get("Authorization"), r.Header.Get("x-api-key")
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/v1/messages") {
+			_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"ok"}]}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"ok"}}]}`)
+	}))
+	defer srv.Close()
+
+	o, _ := New("openai", srv.URL, "configured", "m", nil)
+	if _, err := o.Complete(context.Background(), Request{APIKey: "per-request"}); err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Bearer per-request" {
+		t.Fatalf("openai Authorization = %q", gotAuth)
+	}
+	a, _ := New("anthropic", srv.URL, "configured", "m", nil)
+	if _, err := a.Complete(context.Background(), Request{APIKey: "per-request"}); err != nil {
+		t.Fatal(err)
+	}
+	if gotXKey != "per-request" {
+		t.Fatalf("anthropic x-api-key = %q", gotXKey)
+	}
+}

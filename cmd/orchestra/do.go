@@ -155,7 +155,11 @@ func runSequential(ctx context.Context, in *bufio.Reader, cfg *config.Config, re
 			return nil
 		}
 	}
-	fmt.Printf("\n%s\n", ui.Success(fmt.Sprintf("✓ workflow complete — all %d steps accepted and committed", len(pl.Steps))))
+	kept := "accepted and committed"
+	if !gitutil.IsRepo(flagDir) {
+		kept = "accepted — changes left in the folder" // git-free: nothing is committed
+	}
+	fmt.Printf("\n%s\n", ui.Success(fmt.Sprintf("✓ workflow complete — all %d steps %s", len(pl.Steps), kept)))
 	return nil
 }
 

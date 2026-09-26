@@ -117,6 +117,37 @@ and cost shows as `—`. Usage appears in the end-of-run line
 and the dashboard's History, Benchmarks and Agents (per-agent totals) tabs. CLI agents
 don't report usage yet, so their runs show `—`.
 
+### Bring your own key (`env:`)
+
+Orchestra never holds or proxies keys. CLI agents keep their own login; API agents read a key from
+the environment. The optional `env:` block on any agent lets you pick *which* key, without putting it
+in `orchestra.yaml`:
+
+```yaml
+agents:
+  - name: opencode-groq          # a second opencode profile on another provider
+    bin: opencode
+    args: ["run"]
+    dir_flag: "--dir"
+    env:
+      GROQ_API_KEY: "${MY_GROQ_KEY}"      # passed into the opencode process
+
+  - name: sonnet-work
+    type: api
+    provider: anthropic
+    model: claude-sonnet-4-5
+    env:
+      ANTHROPIC_API_KEY: "${WORK_ANTHROPIC_KEY}"   # api agents use the api_key_env entry as their key
+```
+
+- Values reference variables as `$VAR` or `${VAR}` and are expanded each time the agent runs.
+- If a referenced variable is unset, the agent shows as **missing key** (not "not installed") in
+  `orchestra agents`, the dashboard's Agents tab and `--probe`, with the variable's name. Values are
+  never printed.
+- Literal values are allowed but `orchestra agents` warns when a `*KEY*`/`*TOKEN*`/`*SECRET*` entry
+  holds one: `orchestra.yaml` is often committed.
+- If the provider rejects a key, the probe names the variable it came from.
+
 ---
 
 ## 3. Implement the `Agent` interface (for a built-in / non-CLI agent)

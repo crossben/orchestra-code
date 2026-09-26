@@ -55,9 +55,13 @@ func (o *OpenAI) Complete(ctx context.Context, req Request) (Response, error) {
 	}
 	payload := openaiRequest{Model: o.model, Messages: msgs, MaxTokens: req.MaxTokens, Temperature: req.Temperature}
 
+	key := o.key
+	if req.APIKey != "" {
+		key = req.APIKey
+	}
 	headers := map[string]string{}
-	if o.key != "" {
-		headers["Authorization"] = "Bearer " + o.key
+	if key != "" {
+		headers["Authorization"] = "Bearer " + key
 	}
 
 	var out openaiResponse

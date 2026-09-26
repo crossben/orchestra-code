@@ -69,6 +69,12 @@ agents:
   #   model: gpt-4o
   #   api_key_env: OPENAI_API_KEY
   #   capabilities: [plan, implement, review]
+  #
+  # Any agent can take an env: block to choose its key without writing it here
+  # (bring your own key; $VAR / ${VAR} are expanded at run time):
+  #
+  #   env:
+  #     GROQ_API_KEY: "${MY_GROQ_KEY}"
 `
 
 func newInitCmd() *cobra.Command {
