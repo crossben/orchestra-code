@@ -456,3 +456,16 @@ func TestParallelUsage(t *testing.T) {
 		t.Fatalf("empty /par should print usage, got %+v", m.messages)
 	}
 }
+
+func TestParallelRecordsTaskUsage(t *testing.T) {
+	m := testModel()
+	task := &parTask{agent: "alpha", prompt: "p", turn: engine.Turn{Attempts: 1,
+		Usage: agent.Usage{InputTokens: 3000, OutputTokens: 300, CostUSD: 0.012, Known: true, Priced: true}}}
+	m.recordTask(task, "accepted", "diff")
+	if len(m.runs) != 1 || m.runs[0].TokensIn != 3000 || m.runs[0].TokensOut != 300 || m.runs[0].CostUSD != 0.012 {
+		t.Fatalf("parallel task not recorded with usage: %+v", m.runs)
+	}
+	if st := m.stats["alpha"]; st.TokensIn != 3000 {
+		t.Fatalf("agent totals not updated: %+v", st)
+	}
+}

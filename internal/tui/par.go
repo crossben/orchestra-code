@@ -466,7 +466,7 @@ func (m Model) onWaveDone(msg parWaveDoneMsg) (tea.Model, tea.Cmd) {
 				t.status = tsCancelled
 			}
 			if !t.start.IsZero() {
-				m.record(memory.Run{Agent: t.agent, Prompt: t.prompt, Outcome: "cancelled", Attempts: t.attempt})
+				m.record(usageRun(memory.Run{Agent: t.agent, Prompt: t.prompt, Outcome: "cancelled", Attempts: t.attempt}, t.turn.Usage))
 			}
 		}
 		return m.finishPar("↺ parallel run cancelled — isolated trees removed, any stray changes reverted")
@@ -582,8 +582,8 @@ func (m *Model) dropTree(t *parTask) {
 }
 
 func (m *Model) recordTask(t *parTask, outcome, diff string) {
-	m.record(memory.Run{Agent: t.agent, Prompt: t.prompt, Outcome: outcome,
-		Attempts: t.turn.Attempts, Passed: t.turn.Report.Passed(), Diff: diff})
+	m.record(usageRun(memory.Run{Agent: t.agent, Prompt: t.prompt, Outcome: outcome,
+		Attempts: t.turn.Attempts, Passed: t.turn.Report.Passed(), Diff: diff}, t.turn.Usage))
 }
 
 // finishPar ends the run: note blocked steps, clean up every isolated tree,
