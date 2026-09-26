@@ -131,7 +131,8 @@ type reviewMeta struct {
 	Report   *validate.Report // nil = not available (history)
 	Outcome  string           // history outcome; "" while pending review
 	When     time.Time
-	ReadOnly bool // no accept/reject (Changes, History)
+	ReadOnly bool   // no accept/reject (Changes, History)
+	Context  string // where this review sits, e.g. "wave 1/2 · task 1/3" (parallel runs)
 }
 
 // reviewer is the file-by-file diff review screen shared by Chat, Changes and
@@ -276,6 +277,9 @@ func (r reviewer) summary() string {
 		left = append(left, pill("REJECTED", red))
 	default:
 		left = append(left, pill(strings.ToUpper(r.meta.Outcome), gray))
+	}
+	if r.meta.Context != "" {
+		left = append(left, headSty.Render(r.meta.Context))
 	}
 	if r.meta.Agent != "" {
 		left = append(left, youSty.Render(r.meta.Agent))

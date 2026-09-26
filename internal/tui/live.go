@@ -163,6 +163,9 @@ type lineWriter struct {
 	mu      sync.Mutex
 	ch      chan tea.Msg
 	partial string
+	// tag, if set, wraps each batch of lines (parallel runs tag them with the
+	// task id); nil sends a plain outputMsg.
+	tag func(lines []string) tea.Msg
 }
 
 func (w *lineWriter) Write(p []byte) (int, error) {
@@ -193,8 +196,12 @@ func (w *lineWriter) emit(raw []string) {
 	for _, l := range raw {
 		lines = append(lines, cleanLine(l))
 	}
+	var msg tea.Msg = outputMsg{lines: lines}
+	if w.tag != nil {
+		msg = w.tag(lines)
+	}
 	select {
-	case w.ch <- outputMsg{lines: lines}:
+	case w.ch <- msg:
 	default:
 	}
 }
