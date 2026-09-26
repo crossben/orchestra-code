@@ -40,6 +40,7 @@ Binary is at `bin/orchestra` (gitignored).
 - `internal/router/` — AI routing: classifies intent → picks agent. CLI classifier by default; optional direct-API classifier (`router.classifier`); history-aware agent resolution via the `History` interface.
 - `internal/planner/` — decomposes requests into ordered steps with `depends_on` for parallelism.
 - `internal/scheduler/` — bounded-concurrency DAG runner for parallel isolated tasks.
+- `internal/parallel/` — shared plan → waves → isolated task logic (`Graph`, `BaseGuard`, `RunStep`) used by `do --parallel` and the dashboard's `/parallel`.
 - `internal/worktree/` — task isolation behind the `Isolator` interface: `worktree.New(dir)` picks git worktrees in a repository (branch per task, merge + conflict detection) or a `CopyIsolator` in plain folders (temp copy per task, all-or-nothing merge, conflict if a touched file changed in the source).
 - `internal/validate/` — build → lint → test pipeline, auto-detects toolchain, stops on first failure.
 - `internal/config/` — YAML config + built-in agent defaults + toolchain auto-detection.
