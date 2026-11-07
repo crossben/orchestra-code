@@ -97,7 +97,7 @@ func (s *Shell) readLine(ctx context.Context) (string, bool) {
 		}
 		return line, true
 	}
-	p := tea.NewProgram(newInputModel(s.promptString(), shellCommands()), tea.WithContext(ctx))
+	p := tea.NewProgram(newInputModel(s.promptString(), s.suggestions()), tea.WithContext(ctx))
 	final, err := p.Run()
 	if err != nil {
 		return "", false
@@ -313,6 +313,29 @@ func shellCommands() []command {
 		{"/help", "", "show this help"},
 		{"/exit", "", "leave the session"},
 	}
+}
+
+// suggestions is the shell palette's full list: the "/" commands plus an
+// "@<agent>" mention for every registered agent (so @-completion works).
+func (s *Shell) suggestions() []command {
+	out := shellCommands()
+	for _, a := range s.reg.All() {
+		out = append(out, command{name: "@" + a.Name(), args: "<task>", desc: capDesc(a)})
+	}
+	return out
+}
+
+// capDesc renders an agent's capabilities as a short one-line description.
+func capDesc(a agent.Agent) string {
+	caps := a.Capabilities()
+	if len(caps) == 0 {
+		return "agent"
+	}
+	parts := make([]string, len(caps))
+	for i, c := range caps {
+		parts[i] = string(c)
+	}
+	return "agent · " + strings.Join(parts, ", ")
 }
 
 func (s *Shell) help() {

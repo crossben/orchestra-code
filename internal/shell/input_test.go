@@ -65,6 +65,39 @@ func TestInputModelPalette(t *testing.T) {
 	}
 }
 
+func TestFilterAgentMentions(t *testing.T) {
+	sug := []command{
+		{name: "/master", args: "<agent>"},
+		{name: "@claude", args: "<task>"},
+		{name: "@opencode", args: "<task>"},
+	}
+	if got := filterCommands(sug, "/"); len(got) != 1 || got[0].name != "/master" {
+		t.Fatalf("filterCommands(/) = %+v, want [/master]", got)
+	}
+	if got := filterCommands(sug, "@"); len(got) != 2 {
+		t.Fatalf("filterCommands(@) = %d items, want 2", len(got))
+	}
+	if got := filterCommands(sug, "@cl"); len(got) != 1 || got[0].name != "@claude" {
+		t.Fatalf("filterCommands(@cl) = %+v, want [@claude]", got)
+	}
+}
+
+func TestInputModelAgentCompletion(t *testing.T) {
+	m := newInputModel("› ", []command{
+		{name: "@claude", args: "<task>"},
+		{name: "@opencode", args: "<task>"},
+	})
+	m = m.typing("@cl")
+	if len(m.matches) != 1 || m.matches[0].name != "@claude" {
+		t.Fatalf("matches = %+v, want [@claude]", m.matches)
+	}
+	nm, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = nm.(inputModel)
+	if m.ti.Value() != "@claude " {
+		t.Fatalf("after Tab, value = %q, want %q", m.ti.Value(), "@claude ")
+	}
+}
+
 func TestInputModelCancel(t *testing.T) {
 	m := newInputModel("orchestra › ", shellCommands())
 	nm, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})

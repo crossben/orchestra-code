@@ -57,11 +57,14 @@ func newInputModel(prompt string, cmds []command) inputModel {
 	return inputModel{ti: ti, commands: cmds}
 }
 
-// filterCommands returns the commands to show for the current input: every
-// command whose name has input as a prefix. It only shows a palette while the
-// user is still typing a bare command (starts with "/", no space yet).
+// filterCommands returns the suggestions to show for the current input: every
+// entry whose name has input as a prefix. It only shows a palette while the
+// user is typing a bare "/" command or "@" agent mention (no space yet).
 func filterCommands(cmds []command, input string) []command {
-	if !strings.HasPrefix(input, "/") || strings.ContainsAny(input, " \t") {
+	if strings.ContainsAny(input, " \t") {
+		return nil
+	}
+	if !strings.HasPrefix(input, "/") && !strings.HasPrefix(input, "@") {
 		return nil
 	}
 	prefix := strings.ToLower(input)

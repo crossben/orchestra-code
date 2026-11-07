@@ -91,6 +91,7 @@ type runStat struct{ files, added, removed int }
 // Model is the dashboard state.
 type Model struct {
 	d             Deps
+	master        string // current orchestrator agent ("/master"; mirrors the router)
 	active        tab
 	width, height int
 	ready         bool
@@ -112,8 +113,10 @@ type Model struct {
 	vp       viewport.Model // transcript
 	cstate   chatState
 	messages []chatLine
-	run      *liveRun // current or last run (nil before the first)
-	par      *parRun  // current or last /parallel run (nil when the last run was a single one)
+	run      *liveRun     // current or last run (nil before the first)
+	par      *parRun      // current or last /parallel run (nil when the last run was a single one)
+	sugg     []suggestion // "/" + "@" palette for the chat input
+	suggSel  int
 	frame    int
 	rv       reviewer    // pending review (cstate == chatReviewing)
 	pending  engine.Turn // the turn under review
@@ -150,8 +153,13 @@ func New(d Deps) Model {
 	ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("ctrl+j"))
 	ta.Focus()
 
+	master := d.DefaultAgent
+	if d.Router != nil && d.Router.MasterAgent() != "" {
+		master = d.Router.MasterAgent()
+	}
 	m := Model{
 		d:        d,
+		master:   master,
 		width:    80,
 		height:   24,
 		probed:   map[string]agent.ProbeResult{},
@@ -172,6 +180,7 @@ func New(d Deps) Model {
 	}
 	m.reload()
 	m.setChatContent()
+	m.refreshSuggestions()
 	return m
 }
 
@@ -323,6 +332,24 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.quitPar()
 		case msg.String() == "tab" && m.active == tabChat && m.par.phase == parRunning:
 			return m.updateParRunning(msg) // tab expands the selected task
+		}
+	}
+	// The "/" + "@" palette owns up/down/tab while it is open.
+	if m.active == tabChat && m.cstate == chatIdle && len(m.sugg) > 0 {
+		switch msg.String() {
+		case "up", "ctrl+p":
+			if m.suggSel > 0 {
+				m.suggSel--
+			}
+			return m, nil
+		case "down", "ctrl+n":
+			if m.suggSel < len(m.sugg)-1 {
+				m.suggSel++
+			}
+			return m, nil
+		case "tab":
+			m.completeSuggestion()
+			return m, nil
 		}
 	}
 	switch msg.String() {

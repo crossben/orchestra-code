@@ -4,7 +4,9 @@
       "Shell(gofmt:*)",
       "Shell(go:*)",
       "Shell(mkdir:*)",
-      "Shell(/home/ben-hattab/Desktop/GrIgRa/orchestra/bin/orchestra:*)"
+      "Shell(/home/ben-hattab/Desktop/GrIgRa/orchestra/bin/orchestra:*)",
+      "Shell(f=$(go env GOMODCACHE)/github.com/charmbracelet/bubbles@v0.20.0/textarea/textarea.go; grep -nE \"^func \\(m \\*?Model\\) (SetValue|SetCursor|Value|Cursor|Reset|Line|Column|SetWidth|SetHeight)\" \"$f\")",
+      "Shell(grep:*)"
     ],
     "deny": [],
     "defaultMode": "default"

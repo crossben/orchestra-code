@@ -73,9 +73,9 @@ best agent (with a printed reason). The agent is chosen by: the AI's own suggest
 best track record in this directory (accepted runs + benchmark wins, once there are ≥3 outcomes; e.g.
 `claude: 8/10 accepted in this dir`) → `router.routes` → `default_agent`. Overrides: `@<name> <task>` forces an agent; `/route off` switches to
 a fixed active agent (`/agent <name>`). `/master <agent>` changes the **orchestrator** — the agent that
-classifies intent, answers questions, and is the default dispatch agent (session-only). Type `/` to show
-the command palette (filters as you type, `Tab` completes, `↑`/`↓` select). Shell commands: `/master`,
-`/agents`, `/route [on|off]`, `/agent`, `/help`, `/exit`.
+classifies intent, answers questions, and is the default dispatch agent (session-only). Type `/` for
+commands or `@` for agents — the palette filters as you type (`Tab` completes, `↑`/`↓` select). Shell
+commands: `/master`, `/agents`, `/route [on|off]`, `/agent`, `/help`, `/exit`.
 Each accepted turn is committed, so the tree stays clean and every turn's diff shows only its own changes.
 
 ### One-shot (scriptable, for CI/workflows)
@@ -137,7 +137,11 @@ It opens on **Chat**. Type a task (`enter` sends, `ctrl+j` adds a newline) and a
 shows routing, each attempt, the agent's output as it streams, and every validation stage
 (`build → lint → test`) as it passes or fails. Failed checks retry automatically. `esc` cancels a run and
 reverts whatever the agent already changed. The panel sits beside the chat on wide terminals and stacks
-below it on narrow ones.
+below it on narrow ones. Type `/` for commands (`/master`, `/route`, `/agents`, `/help`, `/parallel`) or `@`
+to pick an agent — the palette filters as you type (`Tab` completes, `↑`/`↓` select). `@<agent> <task>`
+forces that agent for the message; `/master <agent>` picks the orchestrator, `/route [on|off]` toggles AI
+routing, and `/agents` lists availability — the same controls as the shell. The active master and routing
+mode also show in the header, so they stay visible after the session card is gone.
 
 When the agent is done you get a **review screen**: a file list with `+/−` counts, the selected file's
 diff, validation badges, and the failing check's output if there is one. `[` / `]` move between files, `a`

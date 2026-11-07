@@ -130,7 +130,16 @@ func runTurn(ctx context.Context, d Deps, text string, ch chan tea.Msg) {
 	}
 
 	agentName := d.DefaultAgent
-	if d.RoutingOn && d.Router != nil {
+	prompt := text
+	// A leading "@agent" forces that agent for this task and bypasses routing.
+	if name, rest := splitMention(text); name != "" {
+		if rest == "" {
+			ch <- turnMsg{turn: engine.Turn{Err: fmt.Errorf("@%s needs a task, e.g. \"@%s add tests\"", name, name)}, agent: name}
+			return
+		}
+		agentName, prompt = name, rest
+		send(routedMsg{agent: name, reason: "forced by @" + name})
+	} else if d.RoutingOn && d.Router != nil {
 		dec := d.Router.Route(ctx, text, d.Dir) // quiet: safe in the TUI
 		if dec.IsQuestion() {
 			ans, err := d.Router.Answer(ctx, text, d.Dir, d.Timeout)
@@ -148,7 +157,7 @@ func runTurn(ctx context.Context, d Deps, text string, ch chan tea.Msg) {
 	}
 	lw := &lineWriter{ch: ch}
 	t := engine.Produce(ctx, engine.Options{
-		Agent: ag, Prompt: text, Dir: d.Dir,
+		Agent: ag, Prompt: prompt, Dir: d.Dir,
 		Stages: d.Stages, MaxRetries: d.MaxRetries,
 		Timeout: d.Timeout, Principles: d.Principles,
 		OnEvent: func(e engine.Event) { send(eventMsg{e}) },

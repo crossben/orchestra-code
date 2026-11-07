@@ -43,6 +43,12 @@ func (m Model) header() string {
 	case !m.inRepo:
 		ctx += dimSty.Render(" · plain folder")
 	}
+	// Routing + master state, visible after the session card is gone.
+	if m.d.RoutingOn && m.d.Router != nil {
+		ctx += dimSty.Render("  ") + okSty.Render("AI") + dimSty.Render("·") + youSty.Render(m.master)
+	} else {
+		ctx += dimSty.Render("  fixed ") + youSty.Render(m.d.DefaultAgent)
+	}
 	line := left
 	if gap := m.width - lipgloss.Width(left) - lipgloss.Width(ctx) - 1; gap >= 2 {
 		line = left + strings.Repeat(" ", gap) + ctx

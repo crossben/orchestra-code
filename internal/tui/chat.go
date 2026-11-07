@@ -40,7 +40,7 @@ func (m Model) stackedPanelHeight() int {
 func (m *Model) layout() {
 	bodyH := m.bodyHeight()
 	mw := m.mainWidth()
-	vpH := bodyH - inputHeight
+	vpH := bodyH - inputHeight - m.suggHeight()
 	if m.cstate == chatRunning && !m.wide() {
 		vpH = bodyH - m.stackedPanelHeight()
 	}
@@ -125,6 +125,7 @@ func (m Model) updateChat(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	var cmd tea.Cmd
 	m.ta, cmd = m.ta.Update(msg)
+	m.refreshSuggestions()
 	return m, cmd
 }
 
@@ -138,6 +139,26 @@ func (m Model) submitChat() (tea.Model, tea.Cmd) {
 	if isPar && request == "" {
 		m.messages = append(m.messages, chatLine{role: "sys",
 			text: "usage: /parallel <request> (or /par) — plans the request, runs independent steps in parallel, then you review each one"})
+		m.setChatContent()
+		return m, nil
+	}
+	if arg, isMaster := masterPrefix(text); isMaster {
+		m = m.setMaster(arg)
+		m.setChatContent()
+		return m, nil
+	}
+	if arg, isRoute := routePrefix(text); isRoute {
+		m = m.setRoute(arg)
+		m.setChatContent()
+		return m, nil
+	}
+	if text == "/agents" {
+		m = m.showAgents()
+		m.setChatContent()
+		return m, nil
+	}
+	if text == "/help" {
+		m = m.showHelp()
 		m.setChatContent()
 		return m, nil
 	}
@@ -155,9 +176,144 @@ func (m Model) submitChat() (tea.Model, tea.Cmd) {
 		cmd = m.startRun(text)
 		m.logEvent("info", "task: "+firstLine(text))
 	}
+	m.sugg, m.suggSel = nil, 0 // the palette closes once a task is in flight
 	m.layout()
 	m.setChatContent()
 	return m, cmd
+}
+
+// masterPrefix recognises "/master" and "/master <agent>".
+func masterPrefix(text string) (arg string, ok bool) {
+	const cmd = "/master"
+	switch {
+	case text == cmd:
+		return "", true
+	case strings.HasPrefix(text, cmd+" "):
+		return strings.TrimSpace(text[len(cmd):]), true
+	}
+	return "", false
+}
+
+// setMaster shows or switches the orchestrator agent for the session by
+// re-pointing the router and the default dispatch agent — the dashboard's
+// counterpart of the shell's /master. It appends a system line with the result.
+func (m Model) setMaster(arg string) Model {
+	if arg == "" {
+		routing := "on"
+		if !(m.d.RoutingOn && m.d.Router != nil) {
+			routing = "off"
+		}
+		m.messages = append(m.messages, chatLine{role: "sys", text: fmt.Sprintf("master: %s (routing %s)", m.master, routing)})
+		return m
+	}
+	ag, ok := m.d.Reg.Get(arg)
+	if !ok {
+		m.messages = append(m.messages, chatLine{role: "sys", text: fmt.Sprintf("unknown agent %q — type @ to see agents", arg)})
+		return m
+	}
+	if m.d.Router == nil {
+		m.messages = append(m.messages, chatLine{role: "sys", text: "routing unavailable (no router configured) — /master has no effect"})
+		return m
+	}
+	if err := ag.Health(); err != nil {
+		m.messages = append(m.messages, chatLine{role: "sys", text: fmt.Sprintf("agent %q is not available: %v", arg, err)})
+		return m
+	}
+	if err := m.d.Router.SetMaster(ag); err != nil {
+		m.messages = append(m.messages, chatLine{role: "sys", text: fmt.Sprintf("cannot make %q master: %v", arg, err)})
+		return m
+	}
+	m.master = arg
+	m.d.DefaultAgent = arg
+	m.logEvent("info", "master set to "+arg)
+	m.messages = append(m.messages, chatLine{role: "sys", text: fmt.Sprintf("★ master set to %s — it now classifies, answers, and is the default agent", arg)})
+	return m
+}
+
+// routePrefix recognises "/route" and "/route <on|off>".
+func routePrefix(text string) (arg string, ok bool) {
+	const cmd = "/route"
+	switch {
+	case text == cmd:
+		return "", true
+	case strings.HasPrefix(text, cmd+" "):
+		return strings.TrimSpace(text[len(cmd):]), true
+	}
+	return "", false
+}
+
+// setRoute shows or toggles AI routing for the session (the dashboard's
+// counterpart of the shell's /route).
+func (m Model) setRoute(arg string) Model {
+	switch strings.ToLower(arg) {
+	case "":
+		m.messages = append(m.messages, chatLine{role: "sys", text: "routing is " + onOff(m.d.RoutingOn && m.d.Router != nil)})
+	case "on":
+		if m.d.Router == nil {
+			m.messages = append(m.messages, chatLine{role: "sys", text: "routing unavailable (no router configured)"})
+			return m
+		}
+		m.d.RoutingOn = true
+		m.logEvent("info", "routing on")
+		m.messages = append(m.messages, chatLine{role: "sys", text: "routing on — messages are auto-dispatched; @ still forces an agent"})
+	case "off":
+		m.d.RoutingOn = false
+		m.logEvent("info", "routing off")
+		m.messages = append(m.messages, chatLine{role: "sys", text: fmt.Sprintf("routing off — using agent %q", m.d.DefaultAgent)})
+	default:
+		m.messages = append(m.messages, chatLine{role: "sys", text: "usage: /route [on|off]"})
+	}
+	return m
+}
+
+// showAgents appends the agent list (availability + the active/master marker).
+func (m Model) showAgents() Model {
+	if m.d.Reg == nil {
+		m.messages = append(m.messages, chatLine{role: "sys", text: "no agents registered"})
+		return m
+	}
+	routing := m.d.RoutingOn && m.d.Router != nil
+	var b strings.Builder
+	b.WriteString("agents:")
+	for _, a := range m.d.Reg.All() {
+		status := "✓"
+		if a.Health() != nil {
+			status = "✗ not installed"
+		}
+		marker := "  "
+		switch {
+		case routing && a.Name() == m.master:
+			marker = "★ "
+		case !routing && a.Name() == m.d.DefaultAgent:
+			marker = "▸ "
+		}
+		fmt.Fprintf(&b, "\n  %s%s  %s", marker, a.Name(), status)
+	}
+	m.messages = append(m.messages, chatLine{role: "sys", text: b.String()})
+	return m
+}
+
+// showHelp appends the command list (the dashboard's command set).
+func (m Model) showHelp() Model {
+	lines := []string{"commands:"}
+	for _, c := range chatCommands() {
+		lines = append(lines, fmt.Sprintf("  %-12s %s", c.label, c.desc))
+	}
+	lines = append(lines,
+		"  @<agent>     force this task to a specific agent",
+		"",
+		"type a task and press enter (ctrl+j adds a newline); / opens this list.",
+	)
+	m.messages = append(m.messages, chatLine{role: "sys", text: strings.Join(lines, "\n")})
+	return m
+}
+
+// onOff is a tiny boolean label helper.
+func onOff(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
 }
 
 // onTurn handles the worker's final message.
@@ -303,6 +459,9 @@ func (m Model) chatView() string {
 	default:
 		bottom = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(accent).
 			Padding(0, 1).Width(max(mw-2, 12)).Render(m.ta.View())
+		if p := m.renderSuggestions(mw); p != "" {
+			bottom = p + "\n" + bottom
+		}
 	}
 	main := m.vp.View() + "\n" + bottom
 	if !m.wide() {
@@ -372,6 +531,7 @@ func (m Model) welcome() string {
 		"",
 		keySty.Render("try  ") + "add a /health endpoint with a test",
 		keySty.Render("     ") + "/parallel add login and signup" + dimSty.Render("  (steps run side by side)"),
+		keySty.Render("     ") + "/master opencode" + dimSty.Render("  (pick the orchestrator)"),
 	}
 	if m.d.RoutingOn && m.d.Router != nil {
 		lines = append(lines, keySty.Render("     ")+"why is the build slow?"+dimSty.Render("  (questions get answers)"))
@@ -391,7 +551,7 @@ func (m Model) sessionCard(w, h int) string {
 	}
 	routing := "fixed: " + youSty.Render(m.d.DefaultAgent)
 	if m.d.RoutingOn && m.d.Router != nil {
-		routing = okSty.Render("AI") + " picks the agent"
+		routing = okSty.Render("AI") + dimSty.Render(" · master ") + youSty.Render(m.master)
 	}
 	total := 0
 	if m.d.Reg != nil {
