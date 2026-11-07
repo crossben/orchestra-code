@@ -9,10 +9,12 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"golang.org/x/term"
 
 	"github.com/crossben/orchestra-code/internal/agent"
 	"github.com/crossben/orchestra-code/internal/engine"
@@ -30,6 +32,7 @@ type Shell struct {
 	maxRetries int
 	timeout    time.Duration
 	current    string // active agent when routing is off / for @-less manual mode
+	master     string // orchestrator agent (classifies + answers + default dispatch)
 	routing    bool   // AI routing on/off
 	router     *router.Router
 	mem        *memory.Store
@@ -40,6 +43,10 @@ type Shell struct {
 // New builds a Shell. If rtr is non-nil and routingOn is true, messages are
 // auto-routed; otherwise the shell uses the fixed active agent.
 func New(reg *agent.Registry, dir, defaultAgent string, stages []validate.Stage, maxRetries int, timeout time.Duration, mem *memory.Store, rtr *router.Router, routingOn bool, principles string) *Shell {
+	master := defaultAgent
+	if rtr != nil && rtr.MasterAgent() != "" {
+		master = rtr.MasterAgent()
+	}
 	return &Shell{
 		reg:        reg,
 		dir:        dir,
@@ -47,6 +54,7 @@ func New(reg *agent.Registry, dir, defaultAgent string, stages []validate.Stage,
 		maxRetries: maxRetries,
 		timeout:    timeout,
 		current:    defaultAgent,
+		master:     master,
 		routing:    routingOn && rtr != nil,
 		router:     rtr,
 		mem:        mem,
@@ -58,42 +66,59 @@ func New(reg *agent.Registry, dir, defaultAgent string, stages []validate.Stage,
 // Run drives the read-eval loop until EOF, /exit, or context cancellation (Ctrl+C).
 func (s *Shell) Run(ctx context.Context) error {
 	s.banner()
-	type lineResult struct {
-		line string
-		err  error
-	}
 	for {
-		fmt.Printf("\n%s %s ", ui.Accent("orchestra")+ui.Dim(" ("+s.promptTag()+")"), ui.Accent2("›"))
-		ch := make(chan lineResult, 1)
-		go func() {
-			line, err := s.in.ReadString('\n')
-			ch <- lineResult{line, err}
-		}()
-		select {
-		case <-ctx.Done():
+		line, ok := s.readLine(ctx)
+		if !ok {
 			fmt.Println("\nbye 👋")
 			return nil
-		case res := <-ch:
-			if res.err == io.EOF {
-				fmt.Println("\nbye 👋")
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "/") {
+			if s.command(line) {
 				return nil
 			}
-			if res.err != nil {
-				return res.err
-			}
-			line := strings.TrimSpace(res.line)
-			if line == "" {
-				continue
-			}
-			if strings.HasPrefix(line, "/") {
-				if s.command(line) {
-					return nil
-				}
-				continue
-			}
-			s.handle(ctx, line)
+			continue
 		}
+		s.handle(ctx, line)
 	}
+}
+
+// readLine reads one line of input. In an interactive terminal it runs a Bubble
+// Tea prompt with a "/" command palette; otherwise it reads from stdin directly
+// (pipes, CI, tests) so scripted use is never affected.
+func (s *Shell) readLine(ctx context.Context) (string, bool) {
+	if !interactive() {
+		line, err := s.in.ReadString('\n')
+		if err != nil { // EOF or read error → end the session
+			return "", false
+		}
+		return line, true
+	}
+	p := tea.NewProgram(newInputModel(s.promptString(), shellCommands()), tea.WithContext(ctx))
+	final, err := p.Run()
+	if err != nil {
+		return "", false
+	}
+	im := final.(inputModel)
+	if im.canceled {
+		return "", false
+	}
+	return im.value, true
+}
+
+// promptString is the plain-text prompt shown by the Bubble Tea input (styling
+// is applied via textinput.PromptStyle, so ANSI never confuses width math).
+func (s *Shell) promptString() string {
+	return fmt.Sprintf("orchestra (%s) › ", s.promptTag())
+}
+
+// interactive reports whether both stdin and stdout are terminals. When they are
+// not (piped, CI, tests), the shell avoids raw-mode input entirely.
+func interactive() bool {
+	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
 }
 
 // handle decides what to do with a message: honor an @agent override, else route
@@ -146,7 +171,13 @@ func (s *Shell) runTask(ctx context.Context, agentName, msg string) {
 		fmt.Printf("  agent %q is not available: %v\n", agentName, err)
 		return
 	}
-	_, err := engine.Execute(ctx, s.in, engine.Options{
+	// In interactive terminals the Bubble Tea prompt owns stdin, so give the
+	// engine's accept/reject prompt a fresh reader over the restored terminal.
+	in := s.in
+	if interactive() {
+		in = bufio.NewReader(os.Stdin)
+	}
+	_, err := engine.Execute(ctx, in, engine.Options{
 		Agent:          ag,
 		Prompt:         msg,
 		Dir:            s.dir,
@@ -175,6 +206,8 @@ func (s *Shell) command(line string) bool {
 		s.help()
 	case "/agents":
 		s.listAgents()
+	case "/master":
+		s.masterCmd(arg)
 	case "/route":
 		s.routeCmd(arg)
 	case "/agent":
@@ -196,6 +229,38 @@ func (s *Shell) command(line string) bool {
 		fmt.Printf("  unknown command %q — try /help\n", name)
 	}
 	return false
+}
+
+// masterCmd shows or switches the orchestrator agent — the agent that
+// classifies intent, answers plain questions, and is the default dispatch agent.
+func (s *Shell) masterCmd(arg string) {
+	if arg == "" {
+		master := s.master
+		if s.router != nil {
+			master = s.router.MasterAgent()
+		}
+		fmt.Printf("  master: %s (routing %s)\n", ui.Agent(master), onOff(s.routing))
+		return
+	}
+	ag, ok := s.reg.Get(arg)
+	if !ok {
+		fmt.Printf("  unknown agent %q — try /agents\n", arg)
+		return
+	}
+	if s.router == nil {
+		fmt.Println("  routing unavailable (no router configured) — /master has no effect")
+		return
+	}
+	if err := ag.Health(); err != nil {
+		fmt.Printf("  agent %q is not available: %v\n", arg, err)
+		return
+	}
+	if err := s.router.SetMaster(ag); err != nil {
+		fmt.Printf("  cannot make %q master: %v\n", arg, err)
+		return
+	}
+	s.master = arg
+	fmt.Printf("  master set to %s — it now classifies, answers, and is the default agent\n", ui.Agent(arg))
 }
 
 // routeCmd toggles or reports AI routing.
@@ -220,7 +285,7 @@ func (s *Shell) routeCmd(arg string) {
 
 func (s *Shell) promptTag() string {
 	if s.routing {
-		return "auto"
+		return "auto · " + s.master
 	}
 	return s.current
 }
@@ -228,23 +293,34 @@ func (s *Shell) promptTag() string {
 func (s *Shell) banner() {
 	ui.Banner("the operating system for AI coding agents")
 	fmt.Println()
-	mode := ui.Success("● ") + "AI routing on — just type; " + ui.Accent2("@name") + " or " + ui.Accent2("/route off") + " to override"
+	mode := ui.Success("● ") + fmt.Sprintf("AI routing on — master %s; ", ui.Agent(s.master)) + ui.Accent2("@name") + " or " + ui.Accent2("/route off") + " to override"
 	if !s.routing {
 		mode = ui.Dim("○ ") + fmt.Sprintf("manual mode — active agent %s; %s to auto-route", ui.Agent(s.current), ui.Accent2("/route on"))
 	}
 	fmt.Println(mode)
-	fmt.Println(ui.Dim("/help for commands, /exit to quit."))
+	fmt.Println(ui.Dim("type / for commands, /help for help, /exit to quit."))
 	s.listAgents()
 }
 
+// shellCommands is the single source of truth for the shell's commands — it
+// drives both /help and the "/" palette.
+func shellCommands() []command {
+	return []command{
+		{"/master", "<agent>", "make an agent the orchestrator (router + default)"},
+		{"/agents", "", "list agents and availability"},
+		{"/route", "[on|off]", "show or toggle AI routing"},
+		{"/agent", "<name>", "set the active agent (used when routing is off)"},
+		{"/help", "", "show this help"},
+		{"/exit", "", "leave the session"},
+	}
+}
+
 func (s *Shell) help() {
-	fmt.Print(`  commands:
-    /agents          list agents and availability
-    /route [on|off]  show or toggle AI routing
-    /agent <name>    set the active agent (used when routing is off)
-    /help            show this help
-    /exit            leave the session
-  messages:
+	fmt.Println("  commands:")
+	for _, c := range shellCommands() {
+		fmt.Printf("    %-20s %s\n", c.label(), c.desc)
+	}
+	fmt.Print(`  messages:
     <text>           routed automatically (or sent to the active agent if routing is off)
     @<name> <task>   force this one task to a specific agent
 `)
@@ -258,7 +334,10 @@ func (s *Shell) listAgents() {
 			status = ui.Dim("✗ not installed")
 		}
 		marker := "  "
-		if !s.routing && a.Name() == s.current {
+		switch {
+		case s.routing && a.Name() == s.master:
+			marker = ui.Accent("★ ")
+		case !s.routing && a.Name() == s.current:
 			marker = ui.Accent2("▸ ")
 		}
 		fmt.Printf("    %s%s %s\n", marker, ui.Agent(fmt.Sprintf("%-10s", a.Name())), status)

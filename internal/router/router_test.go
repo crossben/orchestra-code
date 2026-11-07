@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crossben/orchestra-code/internal/agent"
 )
@@ -111,7 +112,7 @@ func TestRouteResolutionOrder(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r := New(tc.cls, nil, testRegistry(), routes, "gamma")
+			r := New(tc.cls, nil, testRegistry(), routes, "gamma", "gamma", time.Second)
 			if tc.hist != nil {
 				r = r.WithHistory(tc.hist)
 			}
@@ -140,3 +141,54 @@ func TestRouteResolutionOrder(t *testing.T) {
 		})
 	}
 }
+
+// stubAgent is a query-capable agent used to test master switching without a
+// real CLI: it answers every Query with a canned string.
+type stubAgent struct {
+	name  string
+	reply string
+}
+
+func (s stubAgent) Name() string                                          { return s.name }
+func (s stubAgent) Run(context.Context, agent.Task) (agent.Result, error) { return agent.Result{}, nil }
+func (s stubAgent) Health() error                                         { return nil }
+func (s stubAgent) Capabilities() []agent.Capability                      { return nil }
+func (s stubAgent) Query(context.Context, agent.Task) (string, error)     { return s.reply, nil }
+
+func TestSetMaster(t *testing.T) {
+	reg := testRegistry()
+	neo := stubAgent{name: "neo", reply: `{"intent":"implement","agent":"neo","reason":"stub"}`}
+	reg.Add(neo)
+
+	r := New(fakeClassifier{c: Classification{Intent: IntentImplement, Agent: "beta"}},
+		stubAgent{name: "answerer"}, reg, nil, "gamma", "gamma", time.Second)
+
+	if err := r.SetMaster(neo); err != nil {
+		t.Fatalf("SetMaster: %v", err)
+	}
+	if got := r.MasterAgent(); got != "neo" {
+		t.Fatalf("MasterAgent = %q, want %q", got, "neo")
+	}
+	// The CLI classifier is rebuilt on the new master, so a fresh Route uses it.
+	d := r.Route(context.Background(), "do it", "/proj")
+	if d.Agent != "neo" {
+		t.Fatalf("after SetMaster, agent = %q, want %q (reason %q)", d.Agent, "neo", d.Reason)
+	}
+}
+
+func TestSetMasterRejectsNonQuerier(t *testing.T) {
+	r := New(fakeClassifier{}, nil, testRegistry(), nil, "gamma", "gamma", time.Second)
+	if err := r.SetMaster(nonQueryAgent{}); err == nil {
+		t.Fatal("SetMaster should reject an agent with no query support")
+	}
+}
+
+// nonQueryAgent implements Agent but not Querier.
+type nonQueryAgent struct{}
+
+func (nonQueryAgent) Name() string { return "quiet" }
+func (nonQueryAgent) Run(context.Context, agent.Task) (agent.Result, error) {
+	return agent.Result{}, nil
+}
+func (nonQueryAgent) Health() error                    { return nil }
+func (nonQueryAgent) Capabilities() []agent.Capability { return nil }

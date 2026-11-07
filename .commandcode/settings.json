@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(gofmt:*)",
+      "Shell(go:*)",
+      "Shell(mkdir:*)",
+      "Shell(/home/ben-hattab/Desktop/GrIgRa/orchestra/bin/orchestra:*)"
+    ],
+    "deny": [],
+    "defaultMode": "default"
+  }
+}

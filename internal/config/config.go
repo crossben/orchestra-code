@@ -379,7 +379,7 @@ func (c *Config) BuildRouter(reg *agent.Registry) (*router.Router, error) {
 		}
 		cls = cli
 	}
-	return router.New(cls, answerer, reg, c.Router.Routes, c.DefaultAgent), nil
+	return router.New(cls, answerer, reg, c.Router.Routes, c.DefaultAgent, c.RouterAgent(), c.TimeoutDuration()), nil
 }
 
 // apiClassifier returns the direct-API classifier, or nil when it is not

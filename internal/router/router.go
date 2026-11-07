@@ -61,12 +61,14 @@ type History interface {
 
 // Router combines a classifier with agent resolution and direct answering.
 type Router struct {
-	cls      Classifier
-	answerer agent.Querier     // used to answer plain questions
-	reg      *agent.Registry   // to check agent availability
-	routes   map[string]string // intent → agent name (static fallback)
-	fallback string            // default agent
-	history  History           // optional track-record tie-breaker
+	cls             Classifier
+	answerer        agent.Querier     // used to answer plain questions
+	reg             *agent.Registry   // to check agent availability
+	routes          map[string]string // intent → agent name (static fallback)
+	fallback        string            // default agent
+	master          string            // orchestrator agent (classifies + answers + fallback)
+	classifyTimeout time.Duration     // bounds a rebuilt CLI classifier call
+	history         History           // optional track-record tie-breaker
 }
 
 // WithHistory enables history-aware resolution (nil disables it) and returns r.
@@ -75,13 +77,40 @@ func (r *Router) WithHistory(h History) *Router {
 	return r
 }
 
-// New builds a Router.
-func New(cls Classifier, answerer agent.Querier, reg *agent.Registry, routes map[string]string, fallback string) *Router {
-	return &Router{cls: cls, answerer: answerer, reg: reg, routes: routes, fallback: fallback}
+// New builds a Router. master is the orchestrator agent name (returned by
+// MasterAgent and swappable with SetMaster); classifyTimeout bounds a CLI
+// classifier call when SetMaster rebuilds one.
+func New(cls Classifier, answerer agent.Querier, reg *agent.Registry, routes map[string]string, fallback, master string, classifyTimeout time.Duration) *Router {
+	return &Router{cls: cls, answerer: answerer, reg: reg, routes: routes, fallback: fallback, master: master, classifyTimeout: classifyTimeout}
 }
 
 // Classifier returns the classifier in use (useful for diagnostics and tests).
 func (r *Router) Classifier() Classifier { return r.cls }
+
+// MasterAgent returns the current orchestrator agent name.
+func (r *Router) MasterAgent() string { return r.master }
+
+// SetMaster re-points the router at a: it becomes the answerer (plain questions)
+// and the default dispatch agent. Unless a direct-API classifier is configured
+// — which keeps classifying cheaply — a is also rebuilt as the CLI classifier.
+// Returns an error if a cannot answer questions.
+func (r *Router) SetMaster(a agent.Agent) error {
+	q, ok := a.(agent.Querier)
+	if !ok {
+		return fmt.Errorf("agent %q cannot be master (no query support)", a.Name())
+	}
+	if _, isAPI := r.cls.(*APIClassifier); !isAPI {
+		cli, err := NewCLIClassifier(a, r.reg.Names(), r.classifyTimeout)
+		if err != nil {
+			return err
+		}
+		r.cls = cli
+	}
+	r.answerer = q
+	r.fallback = a.Name()
+	r.master = a.Name()
+	return nil
+}
 
 // Route classifies the message and resolves it to a Decision. Classification
 // failure is not fatal — it degrades to an implement task on the default agent.

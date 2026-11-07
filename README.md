@@ -52,26 +52,30 @@ orchestra            # drops you into a chat session
 ```
 
 ```
-orchestra (auto) › what does this repo's config loader do?
+orchestra (auto · claude) › what does this repo's config loader do?
   … routing
   <answered inline — no agent dispatched>
 
-orchestra (auto) › add a /health endpoint
+orchestra (auto · claude) › add a /health endpoint
   ↳ implement → agent "opencode" (code change)
   … agent runs, tests run, diff shown …
   accept these changes? [y/N] y
   ✓ changes accepted and committed
 
-orchestra (auto) › @claude write tests for it   # force one task to a specific agent
-orchestra (auto) › /route off                   # fall back to a fixed active agent
-orchestra (claude) › /exit
+orchestra (auto · claude) › /master opencode           # pick the orchestrating agent
+orchestra (auto · opencode) › @claude write tests for it   # force one task to a specific agent
+orchestra (auto · opencode) › /route off                   # fall back to a fixed active agent
+orchestra (opencode) › /exit
 ```
 
 The **AI router** is on by default: plain questions are answered inline, coding tasks auto-route to the
 best agent (with a printed reason). The agent is chosen by: the AI's own suggestion → the agent with the
 best track record in this directory (accepted runs + benchmark wins, once there are ≥3 outcomes; e.g.
 `claude: 8/10 accepted in this dir`) → `router.routes` → `default_agent`. Overrides: `@<name> <task>` forces an agent; `/route off` switches to
-a fixed active agent (`/agent <name>`). Shell commands: `/agents`, `/route [on|off]`, `/agent`, `/help`, `/exit`.
+a fixed active agent (`/agent <name>`). `/master <agent>` changes the **orchestrator** — the agent that
+classifies intent, answers questions, and is the default dispatch agent (session-only). Type `/` to show
+the command palette (filters as you type, `Tab` completes, `↑`/`↓` select). Shell commands: `/master`,
+`/agents`, `/route [on|off]`, `/agent`, `/help`, `/exit`.
 Each accepted turn is committed, so the tree stays clean and every turn's diff shows only its own changes.
 
 ### One-shot (scriptable, for CI/workflows)
