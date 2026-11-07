@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "portfolio",
+      "runtimeExecutable": "bun",
+      "runtimeArgs": ["--cwd=/home/ben-hattab/Desktop/GrIgRa/benhattab/portfolio", "run", "start", "--port", "3457"],
+      "port": 3457
+    },
+    {
+      "name": "portfolio-dev",
+      "runtimeExecutable": "bun",
+      "runtimeArgs": ["--cwd=/home/ben-hattab/Desktop/GrIgRa/benhattab/portfolio", "run", "dev", "--port", "3458"],
+      "port": 3458
+    }
+  ]
+}
